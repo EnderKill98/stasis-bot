@@ -10,7 +10,7 @@ So tell it connect to connect to [ViaProxy](https://github.com/ViaVersion/ViaPro
 
 ## Demonstration
 
-![demonstration](https://transfer.cosmos-ink.net/UCix5bDPqc/2024-05-13%2002-57-09.mp4)
+https://github.com/EnderKill98/stasis-bot/assets/117233381/fdf172e7-99f9-4a14-87d1-84ad3dddf496
 
 ## Running this bot
 
