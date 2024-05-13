@@ -11,7 +11,7 @@ use azalea::{
     entity::{metadata::Player, Position},
     packet_handling::game::SendPacketEvent,
     pathfinder::{
-        goals::{BlockPosGoal, ReachBlockPosGoal},
+        goals::{BlockPosGoal, RadiusGoal, ReachBlockPosGoal},
         Pathfinder,
     },
     prelude::*,
@@ -25,6 +25,7 @@ use azalea::{
     GameProfileComponent, Vec3,
 };
 use clap::Parser;
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -40,7 +41,13 @@ use std::{
 struct Opts {
     // What server ((and port) to connect to
     server_address: String,
+
+    // Player names who are considered more trustworthy for certain commands
+    #[clap(short, long)]
+    admin: Vec<String>,
 }
+
+static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 struct BlockPos {
@@ -71,7 +78,7 @@ impl From<BlockPos> for azalea::BlockPos {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let opts = Opts::parse();
+    let _ = *OPTS;
 
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info");
@@ -100,7 +107,7 @@ async fn main() -> Result<()> {
 
     ClientBuilder::new()
         .set_handler(handle)
-        .start(account, opts.server_address.as_str())
+        .start(account, OPTS.server_address.as_str())
         .await
         .context("Running bot")?;
 }
@@ -197,12 +204,12 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         "help" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
                             bot.send_command_packet(&format!(
-                                "msg {sender} Commands: !help, !about, !tp"
+                                "msg {sender} Commands: !help, !about, !tp, !comehere, !admins"
                             ));
                         }
                         "about" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            bot.send_command_packet(&format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot! Find me on GitHub!"));
+                            bot.send_command_packet(&format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot: github.com/EnderKill98/stasis-bot"));
                         }
                         "tp" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
@@ -235,6 +242,38 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                 "msg {sender} I'm not aware whether you have a pearl here. Sorry!"
                             ));
                             }
+                        }
+                        "comehere" => {
+                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                            if OPTS.admin.contains(&sender) {
+                                let sender_entity = bot
+                                    .entity_by::<With<Player>, (&GameProfileComponent,)>(
+                                        |(profile,): &(&GameProfileComponent,)| {
+                                            profile.name == sender
+                                        },
+                                    );
+                                if let Some(sender_entity) = sender_entity {
+                                    let position = bot.entity_component::<Position>(sender_entity);
+                                    bot.goto(RadiusGoal {
+                                        pos: Vec3::from(&position),
+                                        radius: 0.25,
+                                    });
+                                    bot.send_command_packet(&format!(
+                                        "msg {sender} Walking to you..."
+                                    ));
+                                } else {
+                                    bot.send_command_packet(&format!("msg {sender} I'm not aware whether you have a pearl here. Sorry!"));
+                                }
+                            } else {
+                                bot.send_command_packet(&format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                            }
+                        }
+                        "admins" => {
+                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                            bot.send_command_packet(&format!(
+                                "msg {sender} Admins: {}",
+                                OPTS.admin.join(", ")
+                            ));
                         }
                         _ => {} // Do nothing if unrecognized command
                     }

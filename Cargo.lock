@@ -2334,6 +2334,7 @@ dependencies = [
  "azalea",
  "clap",
  "log",
+ "once_cell",
  "parking_lot",
  "serde",
  "serde_json",
