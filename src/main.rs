@@ -11,7 +11,7 @@ use azalea::{
     entity::{metadata::Player, Position},
     packet_handling::game::SendPacketEvent,
     pathfinder::{
-        goals::{BlockPosGoal, RadiusGoal, ReachBlockPosGoal},
+        goals::{BlockPosGoal, ReachBlockPosGoal},
         Pathfinder,
     },
     prelude::*,
@@ -39,12 +39,16 @@ use std::{
 #[derive(Parser)]
 #[clap(author, version)]
 struct Opts {
-    // What server ((and port) to connect to
+    /// What server ((and port) to connect to
     server_address: String,
 
-    // Player names who are considered more trustworthy for certain commands
+    /// Player names who are considered more trustworthy for certain commands
     #[clap(short, long)]
     admin: Vec<String>,
+
+    /// Automatically log out, once getting to this HP or lower (or a totem pops)
+    #[clap(short = 'h', long)]
+    autolog_hp: Option<f32>,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -254,12 +258,13 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                     );
                                 if let Some(sender_entity) = sender_entity {
                                     let position = bot.entity_component::<Position>(sender_entity);
-                                    bot.goto(RadiusGoal {
-                                        pos: Vec3::from(&position),
-                                        radius: 0.25,
-                                    });
+                                    bot.goto(BlockPosGoal(azalea::BlockPos {
+                                        x: position.x.floor() as i32,
+                                        y: position.y.floor() as i32,
+                                        z: position.z.floor() as i32,
+                                    }));
                                     bot.send_command_packet(&format!(
-                                        "msg {sender} Walking to you..."
+                                        "msg {sender} Walking to your block position..."
                                     ));
                                 } else {
                                     bot.send_command_packet(&format!("msg {sender} I'm not aware whether you have a pearl here. Sorry!"));
@@ -365,6 +370,31 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         "A player appeared at {} with entity id {}",
                         packet.position, packet.id
                     );
+                }
+            }
+            ClientboundGamePacket::EntityEvent(packet) => {
+                let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
+                if packet.entity_id == my_entity_id && packet.event_id == 35 {
+                    // Totem popped!
+                    info!("I popped a Totem!");
+                    if OPTS.autolog_hp.is_some() {
+                        warn!("Disconnecting and quitting because --autolog-hp is enabled...");
+                        bot.disconnect();
+                        std::process::exit(1);
+                    }
+                }
+            }
+            ClientboundGamePacket::SetHealth(packet) => {
+                info!(
+                    "Health: {:.02}, Food: {:.02}, Saturation: {:.02}",
+                    packet.health, packet.food, packet.saturation
+                );
+                if let Some(hp) = OPTS.autolog_hp {
+                    if packet.health <= hp {
+                        warn!("My Health got below {hp:.02}! Disconnecting and quitting...");
+                        bot.disconnect();
+                        std::process::exit(1);
+                    }
                 }
             }
             _ => {}
