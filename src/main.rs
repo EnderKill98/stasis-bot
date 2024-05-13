@@ -11,7 +11,7 @@ use azalea::{
     entity::{metadata::Player, Position},
     packet_handling::game::SendPacketEvent,
     pathfinder::{
-        goals::{RadiusGoal, ReachBlockPosGoal},
+        goals::{BlockPosGoal, ReachBlockPosGoal},
         Pathfinder,
     },
     prelude::*,
@@ -27,7 +27,12 @@ use azalea::{
 use clap::Parser;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// A simple stasis bot, using azalea!
 #[derive(Parser)]
@@ -105,6 +110,7 @@ pub struct BotState {
     remembered_trapdoor_positions: Arc<Mutex<HashMap<String, BlockPos>>>,
     pathfinding_requested_by: Arc<Mutex<Option<String>>>,
     return_to_after_pulled: Arc<Mutex<Option<azalea::Vec3>>>,
+    last_dm_handled_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl BotState {
@@ -181,45 +187,57 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     content.to_lowercase()
                 };
 
-                match command.as_str() {
-                    "help" => {
-                        bot.send_command_packet(&format!(
-                            "msg {sender} Commands: !help, !about, !tp"
-                        ));
-                    }
-                    "about" => {
-                        bot.send_command_packet(&format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot! Find me on GitHub!"));
-                    }
-                    "tp" => {
-                        let remembered_trapdoor_positions =
-                            bot_state.remembered_trapdoor_positions.lock();
-                        if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
-                            if bot_state.pathfinding_requested_by.lock().is_some() {
-                                bot.send_command_packet(&format!(
-                                "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
-                            ));
-                            } else {
-                                bot.send_command_packet(&format!(
-                                    "msg {sender} Walking to your stasis chamber..."
-                                ));
-
-                                *bot_state.return_to_after_pulled.lock() =
-                                    Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
-
-                                info!("Walking to {trapdoor_pos:?}...");
-                                bot.goto(ReachBlockPosGoal {
-                                    pos: azalea::BlockPos::from(*trapdoor_pos),
-                                    chunk_storage: bot.world().read().chunks.clone(),
-                                });
-                                *bot_state.pathfinding_requested_by.lock() = Some(sender.clone());
-                            }
-                        } else {
+                if bot_state
+                    .last_dm_handled_at
+                    .lock()
+                    .map(|at| at.elapsed() > Duration::from_secs(1))
+                    .unwrap_or(true)
+                {
+                    match command.as_str() {
+                        "help" => {
+                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
                             bot.send_command_packet(&format!(
-                                "msg {sender} I'm not aware whether you have a pearl here. Sorry!"
+                                "msg {sender} Commands: !help, !about, !tp"
                             ));
                         }
+                        "about" => {
+                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                            bot.send_command_packet(&format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot! Find me on GitHub!"));
+                        }
+                        "tp" => {
+                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                            let remembered_trapdoor_positions =
+                                bot_state.remembered_trapdoor_positions.lock();
+                            if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
+                                if bot_state.pathfinding_requested_by.lock().is_some() {
+                                    bot.send_command_packet(&format!(
+                                "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
+                            ));
+                                } else {
+                                    bot.send_command_packet(&format!(
+                                        "msg {sender} Walking to your stasis chamber..."
+                                    ));
+
+                                    *bot_state.return_to_after_pulled.lock() = Some(Vec3::from(
+                                        &bot.entity_component::<Position>(bot.entity),
+                                    ));
+
+                                    info!("Walking to {trapdoor_pos:?}...");
+                                    bot.goto(ReachBlockPosGoal {
+                                        pos: azalea::BlockPos::from(*trapdoor_pos),
+                                        chunk_storage: bot.world().read().chunks.clone(),
+                                    });
+                                    *bot_state.pathfinding_requested_by.lock() =
+                                        Some(sender.clone());
+                                }
+                            } else {
+                                bot.send_command_packet(&format!(
+                                "msg {sender} I'm not aware whether you have a pearl here. Sorry!"
+                            ));
+                            }
+                        }
+                        _ => {} // Do nothing if unrecognized command
                     }
-                    _ => {} // Do nothing if unrecognized command
                 }
             }
         }
@@ -356,10 +374,11 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             bot_state.return_to_after_pulled.lock().take()
                         {
                             info!("Returning to {return_to_after_pulled}...");
-                            bot.goto(RadiusGoal {
-                                pos: return_to_after_pulled,
-                                radius: 0.001,
-                            });
+                            bot.goto(BlockPosGoal(azalea::BlockPos {
+                                x: return_to_after_pulled.x.floor() as i32,
+                                y: return_to_after_pulled.y.floor() as i32,
+                                z: return_to_after_pulled.z.floor() as i32,
+                            }));
                         }
 
                         let bot_state = bot_state.clone();
