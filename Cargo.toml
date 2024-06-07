@@ -1,6 +1,6 @@
 [package]
 name = "stasis-bot"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["EnderKill98"]
 
@@ -20,9 +20,9 @@ tokio = "1"
 anyhow = "1"
 
 # The amazing bot library!
-azalea = "0.9.1"
+azalea = { git = "https://github.com/azalea-rs/azalea.git", ref = "c7f9dc4b" }
 # Make the amaziong bot library even more amazing!
-#azalea-viaversion = { git = "https://github.com/azalea-rs/azalea-viaversion", ref = "190948a" }
+azalea-viaversion = { git = "https://github.com/azalea-rs/azalea-viaversion", ref = "c74b5e02" }
 
 parking_lot = "0.12"
 

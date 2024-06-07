@@ -46,6 +46,10 @@ struct Opts {
     #[clap(short, long)]
     admin: Vec<String>,
 
+    /// Use ViaProxy to translate the protocol to the given minecraft version.
+    #[clap(short, long)]
+    via: Option<String>,
+
     /// Automatically log out, once getting to this HP or lower (or a totem pops)
     #[clap(short = 'h', long)]
     autolog_hp: Option<f32>,
@@ -88,9 +92,9 @@ async fn main() -> Result<()> {
         std::env::set_var("RUST_LOG", "info");
     }
 
-    let account = Account::offline("unnamed_bot");
+    //let account = Account::offline("unnamed_bot");
     //let account = Account::microsoft("example@example.com").await.unwrap();
-    /*let auth_result = azalea::auth::auth(
+    let auth_result = azalea::auth::auth(
         "default",
         azalea::auth::AuthOpts {
             cache_file: Some(PathBuf::from("login-secrets.json")),
@@ -107,13 +111,29 @@ async fn main() -> Result<()> {
         },
         // we don't do chat signing by default unless the user asks for it
         certs: None,
-    };*/
+    };
 
-    ClientBuilder::new()
-        .set_handler(handle)
-        .start(account, OPTS.server_address.as_str())
-        .await
-        .context("Running bot")?;
+    info!(
+        "Logged in as {}. Connecting to \"{}\"...",
+        account.username, OPTS.server_address
+    );
+
+    if let Some(via) = &OPTS.via {
+        info!("Using ViaProxy to translate the protocol to minecraft version {via}...");
+        azalea::swarm::SwarmBuilder::new()
+            .set_handler(handle)
+            .add_plugins(azalea_viaversion::ViaVersionPlugin::start(via).await)
+            .add_account(account.clone())
+            .start(OPTS.server_address.as_str())
+            .await
+            .context("Running bot as swarm, using ViaProxy")?
+    } else {
+        ClientBuilder::new()
+            .set_handler(handle)
+            .start(account, OPTS.server_address.as_str())
+            .await
+            .context("Running bot")?;
+    }
 }
 
 #[derive(Default, Clone, Component)]
