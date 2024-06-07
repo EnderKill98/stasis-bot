@@ -53,6 +53,10 @@ struct Opts {
     /// Automatically log out, once getting to this HP or lower (or a totem pops)
     #[clap(short = 'h', long)]
     autolog_hp: Option<f32>,
+
+    /// Workaround for crashes: Forbid the bot from sending any messages to players.
+    #[clap(short = 'q', long)]
+    quiet: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -227,13 +231,17 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     match command.as_str() {
                         "help" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            bot.send_command_packet(&format!(
-                                "msg {sender} Commands: !help, !about, !tp, !comehere, !admins"
-                            ));
+                            if !OPTS.quiet {
+                                bot.send_command_packet(&format!(
+                                    "msg {sender} Commands: !help, !about, !tp, !comehere, !admins"
+                                ));
+                            }
                         }
                         "about" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            bot.send_command_packet(&format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot: github.com/EnderKill98/stasis-bot"));
+                            if !OPTS.quiet {
+                                bot.send_command_packet(&format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot: github.com/EnderKill98/stasis-bot"));
+                            }
                         }
                         "tp" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
@@ -241,13 +249,17 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                 bot_state.remembered_trapdoor_positions.lock();
                             if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
                                 if bot_state.pathfinding_requested_by.lock().is_some() {
-                                    bot.send_command_packet(&format!(
+                                    if !OPTS.quiet {
+                                        bot.send_command_packet(&format!(
                                 "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
                             ));
+                                    }
                                 } else {
-                                    bot.send_command_packet(&format!(
-                                        "msg {sender} Walking to your stasis chamber..."
-                                    ));
+                                    if !OPTS.quiet {
+                                        bot.send_command_packet(&format!(
+                                            "msg {sender} Walking to your stasis chamber..."
+                                        ));
+                                    }
 
                                     *bot_state.return_to_after_pulled.lock() = Some(Vec3::from(
                                         &bot.entity_component::<Position>(bot.entity),
@@ -262,9 +274,11 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                         Some(sender.clone());
                                 }
                             } else {
-                                bot.send_command_packet(&format!(
+                                if !OPTS.quiet {
+                                    bot.send_command_packet(&format!(
                                 "msg {sender} I'm not aware whether you have a pearl here. Sorry!"
                             ));
+                                }
                             }
                         }
                         "comehere" => {
@@ -283,22 +297,30 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                         y: position.y.floor() as i32,
                                         z: position.z.floor() as i32,
                                     }));
-                                    bot.send_command_packet(&format!(
-                                        "msg {sender} Walking to your block position..."
-                                    ));
+                                    if !OPTS.quiet {
+                                        bot.send_command_packet(&format!(
+                                            "msg {sender} Walking to your block position..."
+                                        ));
+                                    }
                                 } else {
-                                    bot.send_command_packet(&format!("msg {sender} I'm not aware whether you have a pearl here. Sorry!"));
+                                    if !OPTS.quiet {
+                                        bot.send_command_packet(&format!("msg {sender} I could not find you in my render distance!"));
+                                    }
                                 }
                             } else {
-                                bot.send_command_packet(&format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                                if !OPTS.quiet {
+                                    bot.send_command_packet(&format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                                }
                             }
                         }
                         "admins" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            bot.send_command_packet(&format!(
-                                "msg {sender} Admins: {}",
-                                OPTS.admin.join(", ")
-                            ));
+                            if !OPTS.quiet {
+                                bot.send_command_packet(&format!(
+                                    "msg {sender} Admins: {}",
+                                    OPTS.admin.join(", ")
+                                ));
+                            }
                         }
                         _ => {} // Do nothing if unrecognized command
                     }
@@ -371,7 +393,9 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                 remembered_trapdoor_positions
                                     .insert(game_profile.name.clone(), block_pos);
 
-                                bot.send_command_packet(&format!("msg {} You have thrown a pearl. Message me \"tp\" to get back here.", game_profile.name));
+                                if !OPTS.quiet {
+                                    bot.send_command_packet(&format!("msg {} You have thrown a pearl. Message me \"tp\" to get back here.", game_profile.name));
+                                }
                                 let bot_state = bot_state.clone();
                                 tokio::spawn(async move {
                                     match bot_state
@@ -436,10 +460,11 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         .lock()
                         .remove(requesting_player)
                     {
-                        bot.send_command_packet(&format!(
-                            "msg {requesting_player} Welcome back, {requesting_player}!"
-                        ));
-
+                        if !OPTS.quiet {
+                            bot.send_command_packet(&format!(
+                                "msg {requesting_player} Welcome back, {requesting_player}!"
+                            ));
+                        }
                         bot.ecs.lock().send_event(SendPacketEvent {
                             entity: bot.entity,
                             packet: ServerboundGamePacket::UseItemOn(ServerboundUseItemOnPacket {
