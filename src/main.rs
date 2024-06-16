@@ -1,7 +1,5 @@
-//! A bot that logs chat messages sent in the server to the console.
-
 #[macro_use]
-extern crate log;
+extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::{
@@ -31,10 +29,12 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt::Debug,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
+use tracing_subscriber::prelude::*;
 
 /// A simple stasis bot, using azalea!
 #[derive(Parser)]
@@ -62,6 +62,14 @@ struct Opts {
     /// Make the stasis bot, not do any stasis-related duties. So you can abuse him easier as an afk bot.
     #[clap(short = 'S', long)]
     no_stasis: bool,
+
+    /// Specify a logfile to log everything into as well
+    #[clap(short = 'l', long)]
+    log_file: Option<PathBuf>,
+
+    /// Disable color. Can fix some issues of still persistent escape codes in log files.
+    #[clap(short = 'C', long)]
+    no_color: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -95,10 +103,34 @@ impl From<BlockPos> for azalea::BlockPos {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse cli args, handle --help, etc.
     let _ = *OPTS;
 
+    // Setup logging
     if std::env::var("RUST_LOG").is_err() {
         std::env::set_var("RUST_LOG", "info");
+    }
+    let reg = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .compact()
+                .with_ansi(!OPTS.no_color),
+        );
+    if let Some(logfile_path) = &OPTS.log_file {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(logfile_path)
+            .context("Open logfile for appending")?;
+        reg.with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(file),
+        )
+        .init();
+    } else {
+        reg.init();
     }
 
     //let account = Account::offline("unnamed_bot");
@@ -195,7 +227,14 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             bot_state.load().await?;
         }
         Event::Chat(packet) => {
-            info!("[CHAT] {}", packet.message().to_ansi());
+            info!(
+                "CHAT: {}",
+                if OPTS.no_color {
+                    packet.message().to_string()
+                } else {
+                    packet.message().to_ansi()
+                }
+            );
             let message = packet.message().to_string();
 
             // Very security and sane way to find out, if message was a dm to self.

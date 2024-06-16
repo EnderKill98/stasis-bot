@@ -9,6 +9,10 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
+[patch."https://github.com/azalea-rs/azalea-viaversion.git"]
+# Prevent azalea-viaversion from enabling the log feature
+azalea = { git = "https://github.com/azalea-rs/azalea.git", default-features = false }
+
 [dependencies]
 # CLI Opt parsing
 clap = { version = "4", features = ["derive"] }
@@ -20,14 +24,15 @@ tokio = "1"
 anyhow = "1"
 
 # The amazing bot library!
-azalea = { git = "https://github.com/azalea-rs/azalea.git", ref = "c7f9dc4b" }
+azalea = { git = "https://github.com/azalea-rs/azalea.git", ref = "c7f9dc4b", default-features = false }
 # Make the amaziong bot library even more amazing!
-azalea-viaversion = { git = "https://github.com/azalea-rs/azalea-viaversion", ref = "c74b5e02" }
+azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", branch = "feature/no-default-features" }
 
 parking_lot = "0.12"
 
 # Logging
-log = "0.4"
+tracing = "0.1"
+tracing-subscriber = "0.3"
 
 # Serde
 serde = { version = "1", features = ["derive"] }

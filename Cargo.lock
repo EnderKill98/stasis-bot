@@ -334,7 +334,6 @@ dependencies = [
  "azalea-world",
  "bevy_app",
  "bevy_ecs",
- "bevy_log",
  "bevy_tasks",
  "bevy_time",
  "derive_more",
@@ -538,7 +537,7 @@ dependencies = [
 [[package]]
 name = "azalea-viaversion"
 version = "0.1.0"
-source = "git+https://github.com/azalea-rs/azalea-viaversion#c74b5e02b9d29875c79c746bdfb70d1116bda49a"
+source = "git+https://github.com/EnderKill98/azalea-viaversion.git?branch=feature/no-default-features#00607a2c5b1a563b2ad225b1944ef0a05c852174"
 dependencies = [
  "anyhow",
  "azalea",
@@ -2403,12 +2402,13 @@ dependencies = [
  "azalea",
  "azalea-viaversion",
  "clap",
- "log",
  "once_cell",
  "parking_lot",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
