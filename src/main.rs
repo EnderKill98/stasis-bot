@@ -133,6 +133,21 @@ async fn main() -> Result<()> {
         reg.init();
     }
 
+    if OPTS.no_color {
+        info!("Will not use colored chat messages and disabled ansi formatting in console.");
+    }
+
+    if OPTS.quiet {
+        info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
+    }
+
+    if let Some(autolog_hp) = OPTS.autolog_hp {
+        info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
+    }
+
+    info!("Admins: {}", OPTS.admin.join(", "));
+
+    info!("Logging in...");
     //let account = Account::offline("unnamed_bot");
     //let account = Account::microsoft("example@example.com").await.unwrap();
     let auth_result = azalea::auth::auth(
