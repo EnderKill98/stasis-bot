@@ -525,7 +525,7 @@ async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, joi
         info!("Reconnecting after {} seconds...", reconnect_after_secs);
 
         tokio::time::sleep(Duration::from_secs(reconnect_after_secs)).await;
-        reconnect_after_secs *= 2;
+        reconnect_after_secs = (reconnect_after_secs * 2).min(60 * 30); // 2x or max 30 minutes
 
         info!("Joining again...");
         match swarm
