@@ -58,6 +58,10 @@ struct Opts {
     /// Workaround for crashes: Forbid the bot from sending any messages to players.
     #[clap(short = 'q', long)]
     quiet: bool,
+
+    /// Make the stasis bot, not do any stasis-related duties. So you can abuse him easier as an afk bot.
+    #[clap(short = 'S', long)]
+    no_stasis: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -234,8 +238,15 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         "help" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
                             if !OPTS.quiet {
+                                let mut commands = vec!["!help", "!about", "!comehere", "!admins"];
+                                if !OPTS.no_stasis {
+                                    commands.push("!tp");
+                                }
+                                commands.sort();
+
                                 bot.send_command_packet(&format!(
-                                    "msg {sender} Commands: !help, !about, !tp, !comehere, !admins"
+                                    "msg {sender} Commands: {}",
+                                    commands.join(", ")
                                 ));
                             }
                         }
@@ -249,37 +260,48 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
                             let remembered_trapdoor_positions =
                                 bot_state.remembered_trapdoor_positions.lock();
-                            if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
-                                if bot_state.pathfinding_requested_by.lock().is_some() {
-                                    if !OPTS.quiet {
-                                        bot.send_command_packet(&format!(
-                                "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
-                            ));
+                            if OPTS.no_stasis {
+                                if !OPTS.quiet {
+                                    bot.send_command_packet(&format!(
+                                        "msg {sender} I'm not allowed to do pearl duties :(..."
+                                    ));
+                                }
+                            } else {
+                                if let Some(trapdoor_pos) =
+                                    remembered_trapdoor_positions.get(&sender)
+                                {
+                                    if bot_state.pathfinding_requested_by.lock().is_some() {
+                                        if !OPTS.quiet {
+                                            bot.send_command_packet(&format!(
+                                                "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
+                                            ));
+                                        }
+                                    } else {
+                                        if !OPTS.quiet {
+                                            bot.send_command_packet(&format!(
+                                                "msg {sender} Walking to your stasis chamber..."
+                                            ));
+                                        }
+
+                                        *bot_state.return_to_after_pulled.lock() =
+                                            Some(Vec3::from(
+                                                &bot.entity_component::<Position>(bot.entity),
+                                            ));
+
+                                        info!("Walking to {trapdoor_pos:?}...");
+                                        bot.goto(ReachBlockPosGoal {
+                                            pos: azalea::BlockPos::from(*trapdoor_pos),
+                                            chunk_storage: bot.world().read().chunks.clone(),
+                                        });
+                                        *bot_state.pathfinding_requested_by.lock() =
+                                            Some(sender.clone());
                                     }
                                 } else {
                                     if !OPTS.quiet {
                                         bot.send_command_packet(&format!(
-                                            "msg {sender} Walking to your stasis chamber..."
-                                        ));
-                                    }
-
-                                    *bot_state.return_to_after_pulled.lock() = Some(Vec3::from(
-                                        &bot.entity_component::<Position>(bot.entity),
-                                    ));
-
-                                    info!("Walking to {trapdoor_pos:?}...");
-                                    bot.goto(ReachBlockPosGoal {
-                                        pos: azalea::BlockPos::from(*trapdoor_pos),
-                                        chunk_storage: bot.world().read().chunks.clone(),
-                                    });
-                                    *bot_state.pathfinding_requested_by.lock() =
-                                        Some(sender.clone());
-                                }
-                            } else {
-                                if !OPTS.quiet {
-                                    bot.send_command_packet(&format!(
                                 "msg {sender} I'm not aware whether you have a pearl here. Sorry!"
                             ));
+                                    }
                                 }
                             }
                         }
@@ -331,7 +353,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
         }
         Event::Packet(packet) => match packet.as_ref() {
             ClientboundGamePacket::AddEntity(packet) => {
-                if packet.entity_type == EntityKind::EnderPearl {
+                if !OPTS.no_stasis && packet.entity_type == EntityKind::EnderPearl {
                     let owning_player_entity_id = packet.data;
                     let mut bot = bot.clone();
                     let entity = bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(
