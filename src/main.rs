@@ -1,3 +1,5 @@
+pub mod commands;
+
 #[macro_use]
 extern crate tracing;
 
@@ -6,12 +8,9 @@ use azalea::{
     blocks::Block,
     core::direction::Direction,
     ecs::query::With,
-    entity::{metadata::Player, Position},
+    entity::metadata::Player,
     packet_handling::game::SendPacketEvent,
-    pathfinder::{
-        goals::{BlockPosGoal, ReachBlockPosGoal},
-        Pathfinder,
-    },
+    pathfinder::{goals::BlockPosGoal, Pathfinder},
     prelude::*,
     protocol::packets::game::{
         serverbound_interact_packet::InteractionHand,
@@ -21,7 +20,7 @@ use azalea::{
     registry::EntityKind,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    GameProfileComponent, JoinOpts, Vec3,
+    GameProfileComponent, JoinOpts,
 };
 use clap::Parser;
 use once_cell::sync::Lazy;
@@ -273,20 +272,13 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                 ));
             }
 
-            if let Some((sender, mut content)) = dm {
-                if content.starts_with('!') {
-                    content.remove(0);
-                }
+            if let Some((sender, content)) = dm {
                 let (command, args) = if content.contains(' ') {
-                    let mut all_args: Vec<_> = content
-                        .to_lowercase()
-                        .split(' ')
-                        .map(|s| s.to_owned())
-                        .collect();
+                    let mut all_args: Vec<_> = content.split(' ').map(|s| s.to_owned()).collect();
                     let command = all_args.remove(0);
                     (command, all_args)
                 } else {
-                    (content.to_lowercase(), vec![])
+                    (content, vec![])
                 };
 
                 if bot_state
@@ -295,139 +287,16 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     .map(|at| at.elapsed() > Duration::from_secs(1))
                     .unwrap_or(true)
                 {
-                    match command.as_str() {
-                        "help" => {
-                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            if !OPTS.quiet {
-                                let mut commands =
-                                    vec!["!help", "!about", "!comehere", "!admins", "!say"];
-                                if !OPTS.no_stasis {
-                                    commands.push("!tp");
-                                }
-                                commands.sort();
-
-                                bot.send_command_packet(&format!(
-                                    "msg {sender} Commands: {}",
-                                    commands.join(", ")
-                                ));
-                            }
-                        }
-                        "about" => {
-                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            if !OPTS.quiet {
-                                bot.send_command_packet(&format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot: github.com/EnderKill98/stasis-bot"));
-                            }
-                        }
-                        "tp" => {
-                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            let remembered_trapdoor_positions =
-                                bot_state.remembered_trapdoor_positions.lock();
-                            if OPTS.no_stasis {
-                                if !OPTS.quiet {
-                                    bot.send_command_packet(&format!(
-                                        "msg {sender} I'm not allowed to do pearl duties :(..."
-                                    ));
-                                }
-                            } else {
-                                if let Some(trapdoor_pos) =
-                                    remembered_trapdoor_positions.get(&sender)
-                                {
-                                    if bot_state.pathfinding_requested_by.lock().is_some() {
-                                        if !OPTS.quiet {
-                                            bot.send_command_packet(&format!(
-                                                "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
-                                            ));
-                                        }
-                                    } else {
-                                        if !OPTS.quiet {
-                                            bot.send_command_packet(&format!(
-                                                "msg {sender} Walking to your stasis chamber..."
-                                            ));
-                                        }
-
-                                        *bot_state.return_to_after_pulled.lock() =
-                                            Some(Vec3::from(
-                                                &bot.entity_component::<Position>(bot.entity),
-                                            ));
-
-                                        info!("Walking to {trapdoor_pos:?}...");
-                                        bot.goto(ReachBlockPosGoal {
-                                            pos: azalea::BlockPos::from(*trapdoor_pos),
-                                            chunk_storage: bot.world().read().chunks.clone(),
-                                        });
-                                        *bot_state.pathfinding_requested_by.lock() =
-                                            Some(sender.clone());
-                                    }
-                                } else {
-                                    if !OPTS.quiet {
-                                        bot.send_command_packet(&format!(
-                                "msg {sender} I'm not aware whether you have a pearl here. Sorry!"
-                            ));
-                                    }
-                                }
-                            }
-                        }
-                        "comehere" => {
-                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            if OPTS.admin.contains(&sender) {
-                                let sender_entity = bot
-                                    .entity_by::<With<Player>, (&GameProfileComponent,)>(
-                                        |(profile,): &(&GameProfileComponent,)| {
-                                            profile.name == sender
-                                        },
-                                    );
-                                if let Some(sender_entity) = sender_entity {
-                                    let position = bot.entity_component::<Position>(sender_entity);
-                                    bot.goto(BlockPosGoal(azalea::BlockPos {
-                                        x: position.x.floor() as i32,
-                                        y: position.y.floor() as i32,
-                                        z: position.z.floor() as i32,
-                                    }));
-                                    if !OPTS.quiet {
-                                        bot.send_command_packet(&format!(
-                                            "msg {sender} Walking to your block position..."
-                                        ));
-                                    }
-                                } else {
-                                    if !OPTS.quiet {
-                                        bot.send_command_packet(&format!("msg {sender} I could not find you in my render distance!"));
-                                    }
-                                }
-                            } else {
-                                if !OPTS.quiet {
-                                    bot.send_command_packet(&format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
-                                }
-                            }
-                        }
-                        "admins" => {
-                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            if !OPTS.quiet {
-                                bot.send_command_packet(&format!(
-                                    "msg {sender} Admins: {}",
-                                    OPTS.admin.join(", ")
-                                ));
-                            }
-                        }
-                        "say" => {
-                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            if OPTS.admin.contains(&sender) {
-                                let command_or_chat = args.join(" ");
-                                if command_or_chat.starts_with("/") {
-                                    info!("Sending command: {command_or_chat}");
-                                    bot.send_command_packet(&format!("{}", &command_or_chat[1..]));
-                                } else {
-                                    info!("Sending chat: {command_or_chat}");
-                                    bot.send_chat_packet(&command_or_chat);
-                                }
-                            } else {
-                                if !OPTS.quiet {
-                                    bot.send_command_packet(&format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
-                                }
-                            }
-                        }
-
-                        _ => {} // Do nothing if unrecognized command
+                    info!("Executing command {command:?} sent by {sender:?} with args {args:?}");
+                    if commands::execute(&mut bot, &bot_state, sender, command, args)
+                        .context("Executing command")?
+                    {
+                        *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                    } else {
+                        warn!("Command was not executed. Most likely an unknown command.");
                     }
+                } else {
+                    warn!("Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked.");
                 }
             }
         }
