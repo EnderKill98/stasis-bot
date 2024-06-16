@@ -145,6 +145,10 @@ async fn main() -> Result<()> {
         info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
     }
 
+    if OPTS.no_stasis {
+        info!("Will not perform any stasis duties!");
+    }
+
     info!("Admins: {}", OPTS.admin.join(", "));
 
     info!("Logging in...");
@@ -201,7 +205,7 @@ impl BotState {
         PathBuf::from("remembered-trapdoor-positions.json")
     }
 
-    pub async fn load(&mut self) -> Result<()> {
+    pub async fn load_stasis(&mut self) -> Result<()> {
         let remembered_trapdoor_positions_path = Self::remembered_trapdoor_positions_path();
         if remembered_trapdoor_positions_path.exists()
             && !remembered_trapdoor_positions_path.is_dir()
@@ -224,7 +228,7 @@ impl BotState {
         Ok(())
     }
 
-    pub async fn save(&self) -> Result<()> {
+    pub async fn save_stasis(&self) -> Result<()> {
         let json =
             serde_json::to_string_pretty(&*self.remembered_trapdoor_positions.as_ref().lock())
                 .context("Convert remembered_trapdoor_positions to json")?;
@@ -238,8 +242,10 @@ impl BotState {
 async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyhow::Result<()> {
     match event {
         Event::Login => {
-            info!("Loading remembered trapdoor positions...");
-            bot_state.load().await?;
+            if !OPTS.no_stasis {
+                info!("Loading remembered trapdoor positions...");
+                bot_state.load_stasis().await?;
+            }
         }
         Event::Chat(packet) => {
             info!(
@@ -497,7 +503,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                 let bot_state = bot_state.clone();
                                 tokio::spawn(async move {
                                     match bot_state
-                                    .save()
+                                    .save_stasis()
                                     .await {
                                         Ok(_) => info!("Saved remembered trapdoor positions to file."),
                                         Err(err) => error!("Failed to save remembered trapdoor positions to file: {err:?}"),
@@ -595,7 +601,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
 
                         let bot_state = bot_state.clone();
                         tokio::spawn(async move {
-                            match bot_state.save().await {
+                            match bot_state.save_stasis().await {
                                 Ok(_) => info!("Saved remembered trapdoor positions to file."),
                                 Err(err) => error!(
                                     "Failed to save remembered trapdoor positions to file: {err:?}"
