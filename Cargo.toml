@@ -9,9 +9,8 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
-[patch."https://github.com/azalea-rs/azalea-viaversion.git"]
-# Prevent azalea-viaversion from enabling the log feature
-azalea = { git = "https://github.com/azalea-rs/azalea.git", default-features = false }
+[patch."https://github.com/EnderKill98/azalea-viaversion.git"]
+azalea = { git = "https://github.com/azalea-rs/azalea.git", ref = "f9e20fd1" }
 
 [dependencies]
 # CLI Opt parsing
@@ -24,7 +23,7 @@ tokio = "1"
 anyhow = "1"
 
 # The amazing bot library!
-azalea = { git = "https://github.com/azalea-rs/azalea.git", ref = "c7f9dc4b", default-features = false }
+azalea = { git = "https://github.com/azalea-rs/azalea.git", ref = "f9e20fd1", default-features = false }
 # Make the amaziong bot library even more amazing!
 azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", branch = "feature/no-default-features" }
 
