@@ -21,8 +21,9 @@ use azalea::{
         ClientboundGamePacket, ServerboundGamePacket,
     },
     registry::EntityKind,
+    swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    GameProfileComponent, Vec3,
+    GameProfileComponent, JoinOpts, Vec3,
 };
 use clap::Parser;
 use once_cell::sync::Lazy;
@@ -128,6 +129,7 @@ async fn main() -> Result<()> {
             .set_handler(handle)
             .add_plugins(azalea_viaversion::ViaVersionPlugin::start(via).await)
             .add_account(account.clone())
+            .set_swarm_handler(swarm_handle)
             .start(OPTS.server_address.as_str())
             .await
             .context("Running bot as swarm, using ViaProxy")?
@@ -507,6 +509,44 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     }
                 }
             }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+#[derive(Default, Clone, Component, Resource)]
+pub struct SwarmState {}
+
+async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, join_opts: JoinOpts) {
+    let mut reconnect_after_secs = 5;
+    loop {
+        info!("Reconnecting after {} seconds...", reconnect_after_secs);
+
+        tokio::time::sleep(Duration::from_secs(reconnect_after_secs)).await;
+        reconnect_after_secs *= 2;
+
+        info!("Joining again...");
+        match swarm
+            .add_with_opts(&account, state.clone(), &join_opts)
+            .await
+        {
+            Ok(_) => return,
+            Err(join_err) => error!("Failed to rejoin: {join_err}"), // Keep rejoining
+        }
+    }
+}
+
+async fn swarm_handle(swarm: Swarm, event: SwarmEvent, state: SwarmState) -> anyhow::Result<()> {
+    match event {
+        SwarmEvent::Disconnect(account, join_opts) => {
+            tokio::spawn(swarm_rejoin(
+                swarm.clone(),
+                state.clone(),
+                (*account).clone(),
+                join_opts.clone(),
+            ));
         }
         _ => {}
     }
