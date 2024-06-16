@@ -222,10 +222,16 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                 if content.starts_with('!') {
                     content.remove(0);
                 }
-                let command = if content.contains(' ') {
-                    content.to_lowercase().split(' ').next().unwrap().to_owned()
+                let (command, args) = if content.contains(' ') {
+                    let mut all_args: Vec<_> = content
+                        .to_lowercase()
+                        .split(' ')
+                        .map(|s| s.to_owned())
+                        .collect();
+                    let command = all_args.remove(0);
+                    (command, all_args)
                 } else {
-                    content.to_lowercase()
+                    (content.to_lowercase(), vec![])
                 };
 
                 if bot_state
@@ -238,7 +244,8 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         "help" => {
                             *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
                             if !OPTS.quiet {
-                                let mut commands = vec!["!help", "!about", "!comehere", "!admins"];
+                                let mut commands =
+                                    vec!["!help", "!about", "!comehere", "!admins", "!say"];
                                 if !OPTS.no_stasis {
                                     commands.push("!tp");
                                 }
@@ -346,6 +353,24 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                 ));
                             }
                         }
+                        "say" => {
+                            *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                            if OPTS.admin.contains(&sender) {
+                                let command_or_chat = args.join(" ");
+                                if command_or_chat.starts_with("/") {
+                                    info!("Sending command: {command_or_chat}");
+                                    bot.send_command_packet(&format!("{}", &command_or_chat[1..]));
+                                } else {
+                                    info!("Sending chat: {command_or_chat}");
+                                    bot.send_chat_packet(&command_or_chat);
+                                }
+                            } else {
+                                if !OPTS.quiet {
+                                    bot.send_command_packet(&format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                                }
+                            }
+                        }
+
                         _ => {} // Do nothing if unrecognized command
                     }
                 }
