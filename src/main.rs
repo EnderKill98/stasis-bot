@@ -27,7 +27,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fmt::Debug,
     path::PathBuf,
     sync::Arc,
@@ -80,6 +80,7 @@ struct Opts {
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
+static INPUTLINE_QUEUE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 struct BlockPos {
@@ -195,6 +196,18 @@ async fn main() -> Result<()> {
         "Logged in as {}. Connecting to \"{}\"...",
         account.username, OPTS.server_address
     );
+
+    // Read input and put in queue
+    std::thread::spawn(|| loop {
+        let mut line = String::new();
+        if let Err(err) = std::io::stdin().read_line(&mut line) {
+            warn!("Not accepting any input anymore because reading failed: Err: {err}");
+            return;
+        }
+        let line: &str = line.trim();
+
+        INPUTLINE_QUEUE.lock().push_back(line.to_owned());
+    });
 
     let mut builder = azalea::swarm::SwarmBuilder::new()
         .set_handler(handle)
@@ -436,6 +449,19 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             _ => {}
         },
         Event::Tick => {
+            {
+                let mut queue = INPUTLINE_QUEUE.lock();
+                while let Some(line) = queue.pop_front() {
+                    if line.starts_with("/") {
+                        info!("Sending command: {line}");
+                        bot.send_command_packet(&format!("{}", &line[1..]));
+                    } else {
+                        info!("Sending chat message: {line}");
+                        bot.send_chat_packet(&line);
+                    }
+                }
+            }
+
             let mut pathfinding_requested_by = bot_state.pathfinding_requested_by.lock();
             if let Some(ref requesting_player) = *pathfinding_requested_by {
                 let mut ecs = bot.ecs.lock();
