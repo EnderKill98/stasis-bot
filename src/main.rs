@@ -73,6 +73,10 @@ struct Opts {
     /// Allow chat messages to be signed.
     #[clap(short = 's', long)]
     sign_chat: bool,
+
+    /// Use an offline account with specified user name.
+    #[clap(long)]
+    offline_username: Option<String>,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -155,26 +159,30 @@ async fn main() -> Result<()> {
     info!("Admins: {}", OPTS.admin.join(", "));
 
     info!("Logging in...");
-    //let account = Account::offline("unnamed_bot");
-    //let account = Account::microsoft("example@example.com").await.unwrap();
-    let auth_result = azalea::auth::auth(
-        "default",
-        azalea::auth::AuthOpts {
-            cache_file: Some(PathBuf::from("login-secrets.json")),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let mut account = azalea::Account {
-        username: auth_result.profile.name,
-        access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
-        uuid: Some(auth_result.profile.id),
-        account_opts: azalea::AccountOpts::Microsoft {
-            email: "default".to_owned(),
-        },
-        // we don't do chat signing by default unless the user asks for it
-        certs: None,
+    let mut account = if let Some(offline_username) = &OPTS.offline_username {
+        info!("Using an offline account with username {offline_username:?}!");
+        Account::offline(&offline_username)
+    } else {
+        let auth_result = azalea::auth::auth(
+            "default",
+            azalea::auth::AuthOpts {
+                cache_file: Some(PathBuf::from("login-secrets.json")),
+                ..Default::default()
+            },
+        )
+        .await?;
+        azalea::Account {
+            username: auth_result.profile.name,
+            access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
+            uuid: Some(auth_result.profile.id),
+            account_opts: azalea::AccountOpts::Microsoft {
+                email: "default".to_owned(),
+            },
+            // we don't do chat signing by default unless the user asks for it
+            certs: None,
+        }
     };
+
     if OPTS.sign_chat {
         account
             .request_certs()
