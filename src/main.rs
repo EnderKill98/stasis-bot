@@ -127,23 +127,18 @@ async fn main() -> Result<()> {
         account.username, OPTS.server_address
     );
 
+    let mut builder = azalea::swarm::SwarmBuilder::new()
+        .set_handler(handle)
+        .set_swarm_handler(swarm_handle)
+        .add_account(account.clone());
     if let Some(via) = &OPTS.via {
         info!("Using ViaProxy to translate the protocol to minecraft version {via}...");
-        azalea::swarm::SwarmBuilder::new()
-            .set_handler(handle)
-            .add_plugins(azalea_viaversion::ViaVersionPlugin::start(via).await)
-            .add_account(account.clone())
-            .set_swarm_handler(swarm_handle)
-            .start(OPTS.server_address.as_str())
-            .await
-            .context("Running bot as swarm, using ViaProxy")?
-    } else {
-        ClientBuilder::new()
-            .set_handler(handle)
-            .start(account, OPTS.server_address.as_str())
-            .await
-            .context("Running bot")?;
+        builder = builder.add_plugins(azalea_viaversion::ViaVersionPlugin::start(via).await);
     }
+    builder
+        .start(OPTS.server_address.as_str())
+        .await
+        .context("Running bot")?
 }
 
 #[derive(Default, Clone, Component)]
