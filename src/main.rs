@@ -69,6 +69,10 @@ struct Opts {
     /// Disable color. Can fix some issues of still persistent escape codes in log files.
     #[clap(short = 'C', long)]
     no_color: bool,
+
+    /// Allow chat messages to be signed.
+    #[clap(short = 's', long)]
+    sign_chat: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -161,7 +165,7 @@ async fn main() -> Result<()> {
         },
     )
     .await?;
-    let account = azalea::Account {
+    let mut account = azalea::Account {
         username: auth_result.profile.name,
         access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
         uuid: Some(auth_result.profile.id),
@@ -171,6 +175,13 @@ async fn main() -> Result<()> {
         // we don't do chat signing by default unless the user asks for it
         certs: None,
     };
+    if OPTS.sign_chat {
+        account
+            .request_certs()
+            .await
+            .context("Request certs for chat signing")?;
+        info!("Chat signing is enabled. Retreived certs for it.");
+    }
 
     info!(
         "Logged in as {}. Connecting to \"{}\"...",
