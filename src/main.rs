@@ -415,10 +415,10 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     }
                 }
                 if packet.entity_type == EntityKind::Player {
-                    info!(
+                    /*info!(
                         "A player appeared at {} with entity id {}",
                         packet.position, packet.id
-                    );
+                    );*/
                 }
             }
             ClientboundGamePacket::EntityEvent(packet) => {
