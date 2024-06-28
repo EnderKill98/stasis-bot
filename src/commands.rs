@@ -18,12 +18,19 @@ pub fn execute(
         command.remove(0);
     }
     command = command.to_lowercase();
+    let sender_is_admin = OPTS.admin.iter().any(|a| sender.eq_ignore_ascii_case(a));
 
     match command.as_str() {
         "help" => {
-            let mut commands = vec!["!help", "!about", "!comehere", "!admins", "!say"];
+            let mut commands = vec!["!help", "!about"];
             if !OPTS.no_stasis {
                 commands.push("!tp");
+            }
+            if sender_is_admin {
+                commands.append(&mut vec!["!comehere", "!say", "!stop"]);
+            }
+            if !OPTS.admin.is_empty() {
+                commands.push("!admins");
             }
             commands.sort();
 
@@ -81,7 +88,7 @@ pub fn execute(
             Ok(true)
         }
         "comehere" => {
-            if !OPTS.admin.contains(&sender) {
+            if !sender_is_admin {
                 send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
                 return Ok(true);
             }
@@ -121,7 +128,7 @@ pub fn execute(
             Ok(true)
         }
         "say" => {
-            if !OPTS.admin.contains(&sender) {
+            if !sender_is_admin {
                 send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
                 return Ok(true);
             }
@@ -135,6 +142,15 @@ pub fn execute(
                 bot.send_chat_packet(&command_or_chat);
             }
             Ok(true)
+        }
+        "stop" => {
+            if !sender_is_admin {
+                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                return Ok(true);
+            }
+
+            info!("Stopping... Bye!");
+            std::process::exit(20);
         }
 
         _ => Ok(false), // Do nothing if unrecognized command
