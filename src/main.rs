@@ -17,6 +17,7 @@ use azalea::{
     protocol::packets::game::{
         serverbound_interact_packet::InteractionHand,
         serverbound_player_action_packet::ServerboundPlayerActionPacket,
+        serverbound_set_carried_item_packet::ServerboundSetCarriedItemPacket,
         serverbound_use_item_on_packet::{BlockHit, ServerboundUseItemOnPacket},
         serverbound_use_item_packet::ServerboundUseItemPacket,
         ClientboundGamePacket, ServerboundGamePacket,
@@ -590,13 +591,24 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             entity,
                             slot: eat_hotbar_slot,
                         });
-                        ecs.send_event(SendPacketEvent {
-                            entity,
-                            packet: ServerboundGamePacket::UseItem(ServerboundUseItemPacket {
-                                hand: InteractionHand::MainHand,
-                                sequence: 0,
-                            }),
-                        });
+                        // In case that the slot differed, the packet was not sent, yet.
+                        ecs.send_event_batch([
+                            SendPacketEvent {
+                                entity,
+                                packet: ServerboundGamePacket::SetCarriedItem(
+                                    ServerboundSetCarriedItemPacket {
+                                        slot: eat_hotbar_slot as u16,
+                                    },
+                                ),
+                            },
+                            SendPacketEvent {
+                                entity,
+                                packet: ServerboundGamePacket::UseItem(ServerboundUseItemPacket {
+                                    hand: InteractionHand::MainHand,
+                                    sequence: 0,
+                                }),
+                            },
+                        ]);
                         *bot_state.eating_until_nutrition_over.lock() = Some(packet.food);
                         info!("Eating {eat_item_name} in hotbar slot {eat_hotbar_slot}...");
                     }
