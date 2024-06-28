@@ -1,5 +1,5 @@
 pub mod commands;
-pub mod openauthmod;
+pub mod plugins;
 
 #[macro_use]
 extern crate tracing;
@@ -239,8 +239,10 @@ async fn main() -> Result<()> {
     }
     if OPTS.openauthmod {
         info!("Using OpenAuthMod authentication protocol. If you connect over a proxy, it can see this traffic!");
-        builder = builder.add_plugins(openauthmod::OpenAuthModPlugin::default());
+        builder = builder.add_plugins(plugins::openauthmod::OpenAuthModPlugin::default());
     }
+    // if OPTS.no_fall:
+    // builder = builder.add_plugins(plugins::nofall::NoFallPlugin::default());
     builder
         .start(OPTS.server_address.as_str())
         .await
