@@ -84,6 +84,10 @@ struct Opts {
     /// Conflicts with --via
     #[clap(short = 'A', long)]
     openauthmod: bool,
+
+    /// Forbid pathfinding to mine blocks to reach its goal
+    #[clap(short = 'M', long)]
+    no_mining: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -522,11 +526,16 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             bot_state.return_to_after_pulled.lock().take()
                         {
                             info!("Returning to {return_to_after_pulled}...");
-                            bot.goto(BlockPosGoal(azalea::BlockPos {
+                            let goal = BlockPosGoal(azalea::BlockPos {
                                 x: return_to_after_pulled.x.floor() as i32,
                                 y: return_to_after_pulled.y.floor() as i32,
                                 z: return_to_after_pulled.z.floor() as i32,
-                            }));
+                            });
+                            if OPTS.no_mining {
+                                bot.goto_without_mining(goal);
+                            } else {
+                                bot.goto(goal);
+                            }
                         }
 
                         let bot_state = bot_state.clone();

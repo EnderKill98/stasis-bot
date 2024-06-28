@@ -61,10 +61,15 @@ pub fn execute(
                     Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
 
                 info!("Walking to {trapdoor_pos:?}...");
-                bot.goto(ReachBlockPosGoal {
+                let goal = ReachBlockPosGoal {
                     pos: azalea::BlockPos::from(*trapdoor_pos),
                     chunk_storage: bot.world().read().chunks.clone(),
-                });
+                };
+                if OPTS.no_mining {
+                    bot.goto_without_mining(goal);
+                } else {
+                    bot.goto(goal);
+                }
                 *bot_state.pathfinding_requested_by.lock() = Some(sender.clone());
             } else {
                 send_command(
@@ -86,11 +91,16 @@ pub fn execute(
             );
             if let Some(sender_entity) = sender_entity {
                 let position = bot.entity_component::<Position>(sender_entity);
-                bot.goto(BlockPosGoal(azalea::BlockPos {
+                let goal = BlockPosGoal(azalea::BlockPos {
                     x: position.x.floor() as i32,
                     y: position.y.floor() as i32,
                     z: position.z.floor() as i32,
-                }));
+                });
+                if OPTS.no_mining {
+                    bot.goto_without_mining(goal);
+                } else {
+                    bot.goto(goal)
+                }
                 send_command(
                     bot,
                     &format!("msg {sender} Walking to your block position..."),
