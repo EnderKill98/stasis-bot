@@ -92,6 +92,10 @@ struct Opts {
     /// Enable looking at the closest player which is no more than N blocks away.
     #[clap(short = 'L', long)]
     look_at_players: Option<u32>,
+
+    /// Enable a command, that allows admins to get the position of the bot. Might be dangerous!
+    #[clap(long)]
+    enable_pos_command: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -175,6 +179,10 @@ async fn main() -> Result<()> {
 
     if OPTS.no_stasis {
         info!("Will not perform any stasis duties!");
+    }
+
+    if OPTS.enable_pos_command {
+        info!("The command !pos has been enabled for admins!");
     }
 
     info!("Admins: {}", OPTS.admin.join(", "));

@@ -4,6 +4,7 @@ use azalea::{
     entity::{metadata::Player, Position},
     pathfinder::goals::{BlockPosGoal, ReachBlockPosGoal},
     prelude::*,
+    world::InstanceName,
     GameProfileComponent, Vec3,
 };
 
@@ -28,6 +29,9 @@ pub fn execute(
             }
             if sender_is_admin {
                 commands.append(&mut vec!["!comehere", "!say", "!stop"]);
+                if OPTS.enable_pos_command {
+                    commands.push("!pos");
+                }
             }
             if !OPTS.admin.is_empty() {
                 commands.push("!admins");
@@ -151,6 +155,27 @@ pub fn execute(
 
             info!("Stopping... Bye!");
             std::process::exit(20);
+        }
+        "pos" => {
+            if !sender_is_admin {
+                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                return Ok(true);
+            }
+            if !OPTS.enable_pos_command {
+                send_command(bot, &format!("msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"));
+                return Ok(true);
+            }
+
+            let pos = bot.component::<Position>();
+            let world_name = bot.component::<InstanceName>();
+            send_command(
+                bot,
+                &format!(
+                    "msg {sender} I'm at {:.03} {:.03} {:.03} in {}",
+                    pos.x, pos.y, pos.z, world_name.path,
+                ),
+            );
+            Ok(true)
         }
 
         _ => Ok(false), // Do nothing if unrecognized command
