@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod openauthmod;
 
 #[macro_use]
 extern crate tracing;
@@ -47,6 +48,7 @@ struct Opts {
     admin: Vec<String>,
 
     /// Use ViaProxy to translate the protocol to the given minecraft version.
+    /// Conflicts with --openauthmod
     #[clap(short, long)]
     via: Option<String>,
 
@@ -77,6 +79,11 @@ struct Opts {
     /// Use an offline account with specified user name.
     #[clap(long)]
     offline_username: Option<String>,
+
+    /// Use OpenAuthMod. Enables using this account across proxies like ViaProxy.
+    /// Conflicts with --via
+    #[clap(short = 'A', long)]
+    openauthmod: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -139,6 +146,11 @@ async fn main() -> Result<()> {
         .init();
     } else {
         reg.init();
+    }
+
+    if OPTS.openauthmod && OPTS.via.is_some() {
+        error!("-v/--via and -A/--openauthmod cannot be used together! Choose only one.");
+        std::process::exit(1);
     }
 
     if OPTS.no_color {
@@ -216,6 +228,10 @@ async fn main() -> Result<()> {
     if let Some(via) = &OPTS.via {
         info!("Using ViaProxy to translate the protocol to minecraft version {via}...");
         builder = builder.add_plugins(azalea_viaversion::ViaVersionPlugin::start(via).await);
+    }
+    if OPTS.openauthmod {
+        info!("Using OpenAuthMod authentication protocol. If you connect over a proxy, it can see this traffic!");
+        builder = builder.add_plugins(openauthmod::OpenAuthModPlugin::default());
     }
     builder
         .start(OPTS.server_address.as_str())

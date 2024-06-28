@@ -40,5 +40,11 @@ serde_json = "1"
 
 once_cell = "1"
 
+# For OpenAuthMod Plugin
+reqwest = { version = "0.12", default-features = false, features = [
+    "stream",
+    "native-tls-vendored",
+] }
+
 # Easy command input
 #rustyline = "14"
