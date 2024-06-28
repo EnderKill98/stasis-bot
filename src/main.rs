@@ -9,7 +9,7 @@ use azalea::{
     blocks::Block,
     core::direction::Direction,
     ecs::query::With,
-    entity::metadata::Player,
+    entity::{metadata::Player, EyeHeight, Pose, Position},
     packet_handling::game::SendPacketEvent,
     pathfinder::{goals::BlockPosGoal, Pathfinder},
     prelude::*,
@@ -21,7 +21,7 @@ use azalea::{
     registry::EntityKind,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    GameProfileComponent, JoinOpts,
+    GameProfileComponent, JoinOpts, Vec3,
 };
 use clap::Parser;
 use once_cell::sync::Lazy;
@@ -88,6 +88,10 @@ struct Opts {
     /// Forbid pathfinding to mine blocks to reach its goal
     #[clap(short = 'M', long)]
     no_mining: bool,
+
+    /// Enable looking at the closest player which is no more than N blocks away.
+    #[clap(short = 'L', long)]
+    look_at_players: Option<u32>,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -469,6 +473,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             _ => {}
         },
         Event::Tick => {
+            // Execute commands from input queue
             {
                 let mut queue = INPUTLINE_QUEUE.lock();
                 while let Some(line) = queue.pop_front() {
@@ -478,6 +483,56 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     } else {
                         info!("Sending chat message: {line}");
                         bot.send_chat_packet(&line);
+                    }
+                }
+            }
+
+            // Look at players
+            if let Some(max_dist) = OPTS.look_at_players {
+                let is_pathfinding = {
+                    let mut ecs = bot.ecs.lock();
+                    let pathfinder: &Pathfinder = ecs
+                        .query::<&Pathfinder>()
+                        .get_mut(&mut *ecs, bot.entity)
+                        .unwrap();
+                    pathfinder.goal.is_some()
+                };
+
+                if !is_pathfinding {
+                    let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
+                    let my_pos = bot.entity_component::<Position>(bot.entity);
+                    let my_eye_height = *bot.entity_component::<EyeHeight>(bot.entity) as f64;
+                    let my_eye_pos = *my_pos + Vec3::new(0f64, my_eye_height, 0f64);
+
+                    let mut closest_eye_pos = None;
+                    let mut closest_dist_sqrt = f64::MAX;
+                    let mut query =
+                        bot.ecs
+                            .lock()
+                            .query::<(&Player, &Position, &EyeHeight, &Pose, &MinecraftEntityId)>();
+                    for (_player, pos, eye_height, pose, entity_id) in query.iter(&bot.ecs.lock()) {
+                        if entity_id.0 == my_entity_id {
+                            continue;
+                        }
+
+                        let y_offset = match pose {
+                            Pose::FallFlying | Pose::Swimming | Pose::SpinAttack => 0.5f64,
+                            Pose::Sleeping => 0.25f64,
+                            Pose::Sneaking => (**eye_height as f64) * 0.85,
+                            _ => **eye_height as f64,
+                        };
+                        let eye_pos = **pos + Vec3::new(0f64, y_offset, 0f64);
+                        let dist_sqrt = my_eye_pos.distance_to_sqr(pos);
+                        if (closest_eye_pos.is_none() || dist_sqrt < closest_dist_sqrt)
+                            && dist_sqrt <= (max_dist * max_dist) as f64
+                        {
+                            closest_eye_pos = Some(eye_pos);
+                            closest_dist_sqrt = dist_sqrt;
+                        }
+                    }
+
+                    if let Some(eye_pos) = closest_eye_pos {
+                        bot.look_at(eye_pos);
                     }
                 }
             }
