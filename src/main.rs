@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
+    io::IsTerminal,
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
@@ -226,16 +227,18 @@ async fn main() -> Result<()> {
     );
 
     // Read input and put in queue
-    std::thread::spawn(|| loop {
-        let mut line = String::new();
-        if let Err(err) = std::io::stdin().read_line(&mut line) {
-            warn!("Not accepting any input anymore because reading failed: Err: {err}");
-            return;
-        }
-        let line: &str = line.trim();
+    if std::io::stdin().is_terminal() {
+        std::thread::spawn(|| loop {
+            let mut line = String::new();
+            if let Err(err) = std::io::stdin().read_line(&mut line) {
+                warn!("Not accepting any input anymore because reading failed: Err: {err}");
+                return;
+            }
+            let line: &str = line.trim();
 
-        INPUTLINE_QUEUE.lock().push_back(line.to_owned());
-    });
+            INPUTLINE_QUEUE.lock().push_back(line.to_owned());
+        });
+    }
 
     let mut builder = azalea::swarm::SwarmBuilder::new()
         .set_handler(handle)
