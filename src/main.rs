@@ -10,15 +10,18 @@ use azalea::{
     core::direction::Direction,
     ecs::query::With,
     entity::{metadata::Player, EyeHeight, Pose, Position},
+    inventory::{InventoryComponent, ItemSlot, SetSelectedHotbarSlotEvent},
     packet_handling::game::SendPacketEvent,
     pathfinder::{goals::BlockPosGoal, Pathfinder},
     prelude::*,
     protocol::packets::game::{
         serverbound_interact_packet::InteractionHand,
+        serverbound_player_action_packet::ServerboundPlayerActionPacket,
         serverbound_use_item_on_packet::{BlockHit, ServerboundUseItemOnPacket},
+        serverbound_use_item_packet::ServerboundUseItemPacket,
         ClientboundGamePacket, ServerboundGamePacket,
     },
-    registry::EntityKind,
+    registry::{EntityKind, Item},
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
     GameProfileComponent, JoinOpts, Vec3,
@@ -97,7 +100,47 @@ struct Opts {
     /// Enable a command, that allows admins to get the position of the bot. Might be dangerous!
     #[clap(long)]
     enable_pos_command: bool,
+
+    /// Enables Automatic Eating food items in hotbar, when appropriate
+    #[clap(long)]
+    auto_eat: bool,
 }
+
+pub const FOOD_ITEMS: &[Item] = &[
+    Item::Apple,
+    Item::GoldenApple,
+    Item::EnchantedGoldenApple,
+    Item::Carrot,
+    Item::GoldenCarrot,
+    Item::MelonSlice,
+    Item::SweetBerries,
+    Item::GlowBerries,
+    Item::Potato,
+    Item::BakedPotato,
+    Item::Beetroot,
+    Item::DriedKelp,
+    Item::Beef,
+    Item::CookedBeef,
+    Item::Porkchop,
+    Item::CookedPorkchop,
+    Item::Mutton,
+    Item::CookedMutton,
+    Item::Chicken,
+    Item::CookedChicken,
+    Item::Rabbit,
+    Item::CookedRabbit,
+    Item::Cod,
+    Item::CookedCod,
+    Item::Salmon,
+    Item::CookedSalmon,
+    Item::TropicalFish,
+    Item::Bread,
+    Item::Cookie,
+    Item::PumpkinPie,
+    Item::MushroomStew,
+    Item::BeetrootSoup,
+    Item::RabbitStew,
+];
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
 static INPUTLINE_QUEUE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
@@ -186,6 +229,10 @@ async fn main() -> Result<()> {
         info!("The command !pos has been enabled for admins!");
     }
 
+    if OPTS.auto_eat {
+        info!("Automatic Eating is enabled.");
+    }
+
     info!("Admins: {}", OPTS.admin.join(", "));
 
     info!("Logging in...");
@@ -266,6 +313,7 @@ pub struct BotState {
     pathfinding_requested_by: Arc<Mutex<Option<String>>>,
     return_to_after_pulled: Arc<Mutex<Option<azalea::Vec3>>>,
     last_dm_handled_at: Arc<Mutex<Option<Instant>>>,
+    eating_until_nutrition_over: Arc<Mutex<Option<u32>>>,
 }
 
 impl BotState {
@@ -480,6 +528,77 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         warn!("My Health got below {hp:.02}! Disconnecting and quitting...");
                         bot.disconnect();
                         std::process::exit(1);
+                    }
+                }
+
+                // TODO: Use Attribute::GenericMaxHealth instead of hardcoded 20
+                let eat_until_nutrition_over = bot_state
+                    .eating_until_nutrition_over
+                    .as_ref()
+                    .lock()
+                    .clone();
+                if let Some(eat_until_nutrition_over) = eat_until_nutrition_over {
+                    // Is eating
+                    if packet.food > eat_until_nutrition_over {
+                        // Food increased, stop eating
+                        bot.ecs.lock().send_event(SendPacketEvent {
+                            entity: bot.entity,
+                            packet: ServerboundGamePacket::PlayerAction(ServerboundPlayerActionPacket {
+                                action: azalea::protocol::packets::game::serverbound_player_action_packet::Action::ReleaseUseItem,
+                                pos: Default::default(),
+                                direction: Direction::Down,
+                                sequence: 0,
+                            })
+                        });
+                        *bot_state.eating_until_nutrition_over.lock() = None;
+                        info!("Finished eating.");
+                    }
+                }
+
+                if OPTS.auto_eat
+                    && eat_until_nutrition_over.is_none()
+                    && (packet.food <= 20 - (3 * 2) || (packet.health < 20f32 && packet.food < 20))
+                {
+                    let mut eat_item = None;
+
+                    // Find first food item in hotbar
+                    let inv = bot.entity_component::<InventoryComponent>(bot.entity);
+                    let inv_menu = inv.inventory_menu;
+                    for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
+                        let item = inv_menu.slot(slot);
+                        if let Some(ItemSlot::Present(item_slot)) = item {
+                            if item_slot
+                                .components
+                                .get(azalea::registry::DataComponentKind::Food)
+                                .is_some()
+                                || FOOD_ITEMS.contains(&item_slot.kind)
+                            {
+                                eat_item = Some((
+                                    hotbar_slot as u8,
+                                    format!("{} ({}x)", item_slot.kind, item_slot.count),
+                                ));
+                                break;
+                            }
+                        }
+                    }
+
+                    if let Some((eat_hotbar_slot, eat_item_name)) = eat_item {
+                        // Switch to slot and start eating
+                        let entity = bot.entity;
+                        let mut ecs = bot.ecs.lock();
+                        ecs.send_event(SetSelectedHotbarSlotEvent {
+                            entity,
+                            slot: eat_hotbar_slot,
+                        });
+                        ecs.send_event(SendPacketEvent {
+                            entity,
+                            packet: ServerboundGamePacket::UseItem(ServerboundUseItemPacket {
+                                hand: InteractionHand::MainHand,
+                                sequence: 0,
+                            }),
+                        });
+                        *bot_state.eating_until_nutrition_over.lock() = Some(packet.food);
+                        info!("Eating {eat_item_name} in hotbar slot {eat_hotbar_slot}...");
                     }
                 }
             }
