@@ -3108,7 +3108,7 @@ checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
 
 [[package]]
 name = "stasis-bot"
-version = "0.3.0-beta.1"
+version = "0.3.0-beta.2"
 dependencies = [
  "anyhow",
  "azalea 0.10.1 (git+https://github.com/EnderKill98/azalea.git?rev=ca0e5b0b)",
