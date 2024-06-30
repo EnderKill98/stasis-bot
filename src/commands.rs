@@ -45,7 +45,7 @@ pub fn execute(
             Ok(true)
         }
         "about" => {
-            send_command(bot, &format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot: github.com/EnderKill98/stasis-bot"));
+            send_command(bot, &format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot {}: github.com/EnderKill98/stasis-bot", env!("CARGO_PKG_VERSION")));
             Ok(true)
         }
         "tp" => {
