@@ -86,21 +86,9 @@ async fn handle_auth_requests_loop(mut rx: mpsc::UnboundedReceiver<AuthRequest>)
                 if attempts >= 2 {
                     // if this is the second attempt and we failed both times, give up
                     break Err(e.into());
-                }
-                if matches!(
-                    e,
-                    ClientSessionServerError::InvalidSession
-                        | ClientSessionServerError::ForbiddenOperation
-                ) {
-                    // uh oh, we got an invalid session and have to reauthenticate now
-                    if let Err(e) = account.refresh().await {
-                        error!("Failed to refresh account: {e:?}");
-                        continue;
-                    }
                 } else {
-                    break Err(e.into());
+                    attempts += 1;
                 }
-                attempts += 1;
             } else {
                 break Ok(());
             }
