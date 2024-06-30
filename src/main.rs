@@ -105,6 +105,10 @@ struct Opts {
     /// Enables Automatic Eating food items in hotbar, when appropriate
     #[clap(long)]
     auto_eat: bool,
+
+    /// File, used to store authentication information in. Ignored if --offline-username is used.
+    #[clap(long, default_value = "login-secrets.json")]
+    auth_file: PathBuf,
 }
 
 pub const FOOD_ITEMS: &[Item] = &[
@@ -205,6 +209,13 @@ async fn main() -> Result<()> {
         reg.init();
     }
 
+    if OPTS.offline_username.is_none() {
+        info!(
+            "File used to store Authentication information: {:?}",
+            OPTS.auth_file
+        );
+    }
+
     if OPTS.openauthmod && OPTS.via.is_some() {
         error!("-v/--via and -A/--openauthmod cannot be used together! Choose only one.");
         std::process::exit(1);
@@ -244,7 +255,7 @@ async fn main() -> Result<()> {
         let auth_result = azalea::auth::auth(
             "default",
             azalea::auth::AuthOpts {
-                cache_file: Some(PathBuf::from("login-secrets.json")),
+                cache_file: Some(OPTS.auth_file.clone()),
                 ..Default::default()
             },
         )
