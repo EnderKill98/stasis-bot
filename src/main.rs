@@ -58,7 +58,7 @@ struct Opts {
     via: Option<String>,
 
     /// Automatically log out, once getting to this HP or lower (or a totem pops)
-    #[clap(short = 'h', long)]
+    #[clap(short = 'H', long)]
     autolog_hp: Option<f32>,
 
     /// Workaround for crashes: Forbid the bot from sending any messages to players.
