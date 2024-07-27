@@ -526,7 +526,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     if OPTS.autolog_hp.is_some() {
                         warn!("Disconnecting and quitting because --autolog-hp is enabled...");
                         bot.disconnect();
-                        std::process::exit(1);
+                        std::process::exit(69);
                     }
                 }
             }
@@ -539,7 +539,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     if packet.health <= hp {
                         warn!("My Health got below {hp:.02}! Disconnecting and quitting...");
                         bot.disconnect();
-                        std::process::exit(1);
+                        std::process::exit(69);
                     }
                 }
 
