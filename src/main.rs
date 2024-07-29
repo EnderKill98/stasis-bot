@@ -450,21 +450,24 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         {
                             let world = bot.world();
                             let world = world.read();
-                            for y_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5] {
-                                let azalea_block_pos = azalea::BlockPos::new(
-                                    packet.position.x.floor() as i32,
-                                    packet.position.y.floor() as i32 + y_offset,
-                                    packet.position.z.floor() as i32,
-                                );
-                                if let Some(state) = world.get_block_state(&azalea_block_pos) {
-                                    let block = Box::<dyn Block>::from(state);
-                                    if block.id().ends_with("_trapdoor") {
-                                        info!(
-                                            "Detected trapdoor at {} for pearl thrown by {}",
-                                            azalea_block_pos, game_profile.name
-                                        );
-                                        found_trapdoor = Some(BlockPos::from(azalea_block_pos));
-                                        break;
+                            for y_offset_abs in 0..16 {
+                                for y_offset_mult in [1, -1] {
+                                    let y_offset = y_offset_abs * y_offset_mult;
+                                    let azalea_block_pos = azalea::BlockPos::new(
+                                        packet.position.x.floor() as i32,
+                                        packet.position.y.floor() as i32 + y_offset,
+                                        packet.position.z.floor() as i32,
+                                    );
+                                    if let Some(state) = world.get_block_state(&azalea_block_pos) {
+                                        let block = Box::<dyn Block>::from(state);
+                                        if block.id().ends_with("_trapdoor") {
+                                            info!(
+                                                "Detected trapdoor at {} for pearl thrown by {}",
+                                                azalea_block_pos, game_profile.name
+                                            );
+                                            found_trapdoor = Some(BlockPos::from(azalea_block_pos));
+                                            break;
+                                        }
                                     }
                                 }
                             }
