@@ -770,12 +770,32 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
     Ok(())
 }
 
-#[derive(Default, Clone, Component, Resource)]
-pub struct SwarmState {}
+#[derive(Clone, Component, Resource)]
+pub struct SwarmState {
+    last_account_refresh: Arc<Mutex<Instant>>,
+}
+
+impl Default for SwarmState {
+    fn default() -> Self {
+        Self {
+            last_account_refresh: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+}
 
 async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, join_opts: JoinOpts) {
     let mut reconnect_after_secs = 5;
     loop {
+        let last_refreshed = state.last_account_refresh.lock().elapsed();
+        if last_refreshed > Duration::from_secs(/*3h*/ 60 * 60 * 3) {
+            info!("This account's access token is more than hours old. Refreshing it!");
+            if let Err(err) = account.refresh().await {
+                error!("Quitting, because account failed to refresh: {err:?}");
+                std::process::exit(30);
+            }
+            *state.last_account_refresh.lock() = Instant::now();
+        }
+
         info!("Reconnecting after {} seconds...", reconnect_after_secs);
 
         tokio::time::sleep(Duration::from_secs(reconnect_after_secs)).await;
