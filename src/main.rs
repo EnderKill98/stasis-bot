@@ -44,6 +44,14 @@ use std::{
 };
 use tracing_subscriber::prelude::*;
 
+#[allow(dead_code)]
+pub const EXITCODE_OTHER: i32 = 1; // Due to errors returned and propagated to main result
+pub const EXITCODE_CONFLICTING_CLI_OPTS: i32 = 2;
+pub const EXITCODE_AUTH_FAILED: i32 = 3;
+
+pub const EXITCODE_USER_REQUESTED_STOP: i32 = 20; // Using an error code to prevent automatic relaunching in some configurations or scripts
+pub const EXITCODE_LOW_HEALTH_OR_TOTEM_POP: i32 = 69;
+
 /// A simple stasis bot, using azalea!
 #[derive(Parser)]
 #[clap(author, version)]
@@ -221,7 +229,7 @@ async fn main() -> Result<()> {
 
     if OPTS.openauthmod && OPTS.via.is_some() {
         error!("-v/--via and -A/--openauthmod cannot be used together! Choose only one.");
-        std::process::exit(1);
+        std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
     }
 
     if OPTS.no_color {
@@ -255,7 +263,13 @@ async fn main() -> Result<()> {
         info!("Using an offline account with username {offline_username:?}!");
         Account::offline(&offline_username)
     } else {
-        let auth_result = auth().await?;
+        let auth_result = match auth().await {
+            Ok(result) => result,
+            Err(err) => {
+                error!("Quiting because failed to authenticate: {err:?}");
+                std::process::exit(EXITCODE_AUTH_FAILED);
+            }
+        };
         azalea::Account {
             username: auth_result.profile.name,
             access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
@@ -536,7 +550,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     if OPTS.autolog_hp.is_some() {
                         warn!("Disconnecting and quitting because --autolog-hp is enabled...");
                         bot.disconnect();
-                        std::process::exit(69);
+                        std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
                     }
                 }
             }
@@ -549,7 +563,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     if packet.health <= hp {
                         warn!("My Health got below {hp:.02}! Disconnecting and quitting...");
                         bot.disconnect();
-                        std::process::exit(69);
+                        std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
                     }
                 }
 
@@ -807,7 +821,7 @@ async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, joi
                 }
                 Err(err) => {
                     error!("Quitting, because could not get new access token: {err:?}");
-                    std::process::exit(3);
+                    std::process::exit(EXITCODE_AUTH_FAILED);
                 }
             }
         }

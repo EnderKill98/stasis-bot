@@ -154,7 +154,7 @@ pub fn execute(
             }
 
             info!("Stopping... Bye!");
-            std::process::exit(20);
+            std::process::exit(crate::EXITCODE_USER_REQUESTED_STOP);
         }
         "pos" => {
             if !sender_is_admin {
