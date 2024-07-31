@@ -8,7 +8,7 @@ extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::{
-    auth::{AuthOpts, AuthResult},
+    auth::AuthResult,
     blocks::Block,
     core::direction::Direction,
     ecs::query::With,
@@ -28,7 +28,7 @@ use azalea::{
     registry::{EntityKind, Item},
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    AccountOpts, GameProfileComponent, JoinOpts, Vec3,
+    GameProfileComponent, JoinOpts, Vec3,
 };
 use clap::Parser;
 use once_cell::sync::Lazy;
