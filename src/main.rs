@@ -1,3 +1,5 @@
+#![feature(let_chains)]
+
 pub mod commands;
 pub mod plugins;
 
@@ -6,6 +8,7 @@ extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::{
+    auth::{AuthOpts, AuthResult},
     blocks::Block,
     core::direction::Direction,
     ecs::query::With,
@@ -25,7 +28,7 @@ use azalea::{
     registry::{EntityKind, Item},
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    GameProfileComponent, JoinOpts, Vec3,
+    AccountOpts, GameProfileComponent, JoinOpts, Vec3,
 };
 use clap::Parser;
 use once_cell::sync::Lazy;
@@ -252,14 +255,7 @@ async fn main() -> Result<()> {
         info!("Using an offline account with username {offline_username:?}!");
         Account::offline(&offline_username)
     } else {
-        let auth_result = azalea::auth::auth(
-            "default",
-            azalea::auth::AuthOpts {
-                cache_file: Some(OPTS.auth_file.clone()),
-                ..Default::default()
-            },
-        )
-        .await?;
+        let auth_result = auth().await?;
         azalea::Account {
             username: auth_result.profile.name,
             access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
@@ -317,6 +313,17 @@ async fn main() -> Result<()> {
         .start(OPTS.server_address.as_str())
         .await
         .context("Running bot")?
+}
+
+async fn auth() -> Result<AuthResult> {
+    Ok(azalea::auth::auth(
+        "default",
+        azalea::auth::AuthOpts {
+            cache_file: Some(OPTS.auth_file.clone()),
+            ..Default::default()
+        },
+    )
+    .await?)
 }
 
 #[derive(Default, Clone, Component)]
@@ -787,13 +794,22 @@ async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, joi
     let mut reconnect_after_secs = 5;
     loop {
         let last_refreshed = state.last_account_refresh.lock().elapsed();
-        if last_refreshed > Duration::from_secs(/*3h*/ 60 * 60 * 3) {
+        if last_refreshed > Duration::from_secs(/*3h*/ 60 * 60 * 3)
+            && let Some(access_token) = account.access_token.clone()
+        {
             info!("This account's access token is more than hours old. Refreshing it!");
-            if let Err(err) = account.refresh().await {
-                error!("Quitting, because account failed to refresh: {err:?}");
-                std::process::exit(30);
+            let auth_result = auth().await;
+            match auth_result {
+                Ok(result) => {
+                    info!("Got new access token!");
+                    *access_token.lock() = result.access_token;
+                    *state.last_account_refresh.lock() = Instant::now();
+                }
+                Err(err) => {
+                    error!("Quitting, because could not get new access token: {err:?}");
+                    std::process::exit(3);
+                }
             }
-            *state.last_account_refresh.lock() = Instant::now();
         }
 
         info!("Reconnecting after {} seconds...", reconnect_after_secs);
