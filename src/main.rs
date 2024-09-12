@@ -48,6 +48,7 @@ use tracing_subscriber::prelude::*;
 pub const EXITCODE_OTHER: i32 = 1; // Due to errors returned and propagated to main result
 pub const EXITCODE_CONFLICTING_CLI_OPTS: i32 = 2;
 pub const EXITCODE_AUTH_FAILED: i32 = 3;
+pub const EXITCODE_NO_ACCESS_TOKEN: i32 = 4;
 
 pub const EXITCODE_USER_REQUESTED_STOP: i32 = 20; // Using an error code to prevent automatic relaunching in some configurations or scripts
 pub const EXITCODE_LOW_HEALTH_OR_TOTEM_POP: i32 = 69;
@@ -120,6 +121,10 @@ struct Opts {
     /// File, used to store authentication information in. Ignored if --offline-username is used.
     #[clap(long, default_value = "login-secrets.json")]
     auth_file: PathBuf,
+
+    /// Only print access token, then quit. Fancy account refresher for something else.
+    #[clap(long)]
+    just_print_access_token: bool,
 }
 
 pub const FOOD_ITEMS: &[Item] = &[
@@ -220,46 +225,52 @@ async fn main() -> Result<()> {
         reg.init();
     }
 
-    if OPTS.offline_username.is_none() {
-        info!(
-            "File used to store Authentication information: {:?}",
-            OPTS.auth_file
-        );
-    }
-
     if OPTS.openauthmod && OPTS.via.is_some() {
         error!("-v/--via and -A/--openauthmod cannot be used together! Choose only one.");
         std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
     }
 
-    if OPTS.no_color {
-        info!("Will not use colored chat messages and disabled ansi formatting in console.");
+    if !OPTS.just_print_access_token {
+        if OPTS.offline_username.is_none() {
+            info!(
+                "File used to store Authentication information: {:?}",
+                OPTS.auth_file
+            );
+        }
+
+        if OPTS.no_color {
+            info!("Will not use colored chat messages and disabled ansi formatting in console.");
+        }
+
+        if OPTS.quiet {
+            info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
+        }
+
+        if let Some(autolog_hp) = OPTS.autolog_hp {
+            info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
+        }
+
+        if OPTS.no_stasis {
+            info!("Will not perform any stasis duties!");
+        }
+
+        if OPTS.enable_pos_command {
+            info!("The command !pos has been enabled for admins!");
+        }
+
+        if OPTS.auto_eat {
+            info!("Automatic Eating is enabled.");
+        }
+
+        info!("Admins: {}", OPTS.admin.join(", "));
+        info!("Logging in...");
     }
 
-    if OPTS.quiet {
-        info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
-    }
-
-    if let Some(autolog_hp) = OPTS.autolog_hp {
-        info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
-    }
-
-    if OPTS.no_stasis {
-        info!("Will not perform any stasis duties!");
-    }
-
-    if OPTS.enable_pos_command {
-        info!("The command !pos has been enabled for admins!");
-    }
-
-    if OPTS.auto_eat {
-        info!("Automatic Eating is enabled.");
-    }
-
-    info!("Admins: {}", OPTS.admin.join(", "));
-
-    info!("Logging in...");
     let mut account = if let Some(offline_username) = &OPTS.offline_username {
+        if OPTS.just_print_access_token {
+            error!("Can't print an access token for an offline account!");
+            std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
+        }
         info!("Using an offline account with username {offline_username:?}!");
         Account::offline(&offline_username)
     } else {
@@ -281,6 +292,17 @@ async fn main() -> Result<()> {
             certs: None,
         }
     };
+
+    // Print access token and exit, if requested
+    if OPTS.just_print_access_token {
+        if let Some(access_token) = account.access_token {
+            println!("{}", access_token.lock());
+            std::process::exit(0);
+        }else {
+            error!("Failed to find access token!");
+            std::process::exit(EXITCODE_NO_ACCESS_TOKEN);
+        }
+    }
 
     if OPTS.sign_chat {
         account
