@@ -23,7 +23,8 @@ tokio = "1"
 anyhow = "1"
 
 # The amazing bot library!
-azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "ca0e5b0b", default-features = false }
+#azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "ca0e5b0b", default-features = false }
+azalea = { git = "https://github.com/azalea-rs/azalea.git", rev = "2992fc6b", default-features = false }
 # Make the amazing bot library even more amazing!
 azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", rev = "62e5aecd" }
 #azalea-viaversion = { path = "../azalea-viaversion" }
