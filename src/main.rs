@@ -114,7 +114,7 @@ struct Opts {
     compute_threads: usize,
 
     /// How many tasks to create for Bevys AsyncComputeTaskPool (might be pathfinding). 0 = Automatic
-    #[clap(short = 'a', long, default_value = "0")]
+    #[clap(short = 'A', long, default_value = "0")]
     async_compute_threads: usize,
 
     /// How many tasks to create for IO. 0 = Automatic

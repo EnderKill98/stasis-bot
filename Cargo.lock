@@ -3807,8 +3807,3 @@ name = "zeroize"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
-
-[[patch.unused]]
-name = "azalea"
-version = "0.10.1"
-source = "git+https://github.com/EnderKill98/azalea.git?rev=ca0e5b0b#ca0e5b0b75f185e4225f461431189e78ad06c8b1"

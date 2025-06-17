@@ -8,11 +8,12 @@ authors = ["EnderKill98"]
 opt-level = 1
 [profile.release]
 opt-level = 3
+#debug = true
 [profile.dev.package."*"]
 opt-level = 3
 
-[patch."https://github.com/azalea-rs/azalea-viaversion.git"]
-azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "ca0e5b0b" }
+#[patch."https://github.com/azalea-rs/azalea-viaversion.git"]
+#azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "ca0e5b0b" }
 
 [dependencies]
 # CLI Opt parsing
