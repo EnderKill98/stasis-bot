@@ -180,7 +180,6 @@ fn main() -> Result<()> {
         }
     }
 
-    /*
     let reg = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(
@@ -202,7 +201,7 @@ fn main() -> Result<()> {
         .init();
     } else {
         reg.init();
-    }*/
+    }
 
     let worker_threads = if OPTS.worker_threads == 0 {
         (OPTS.offline_usernames.len() / 8).max(8)
@@ -313,7 +312,12 @@ async fn async_main() -> Result<()> {
         },
     };
     let builder = azalea::swarm::SwarmBuilder::new_without_plugins()
-        .add_plugins(DefaultPlugins.build().disable::<TaskPoolPlugin>())
+        .add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<TaskPoolPlugin>()
+                .disable::<LogPlugin>(),
+        )
         .add_plugins(DefaultBotPlugins)
         .add_plugins(DefaultSwarmPlugins)
         .add_plugins(TaskPoolPlugin {
@@ -356,6 +360,7 @@ impl Default for BotState {
 async fn handle_outer(bot: Client, event: Event, bot_state: BotState) -> anyhow::Result<()> {
     // Sometimes the component GameProfileComponent is not available early on, causing worker threads to crash
     // Also caching the value for hopefully some performance (not sure, maybe it's worse)
+    let mut update_username = false;
     let username = if let Some(ref username) = *bot_state.own_username.lock() {
         username.clone()
     } else {
@@ -363,14 +368,17 @@ async fn handle_outer(bot: Client, event: Event, bot_state: BotState) -> anyhow:
             .get_component::<GameProfileComponent>()
             .map(|profile| profile.name.clone())
         {
-            *bot_state.own_username.lock() = Some(username.clone());
+            update_username = true;
             username
         } else {
             "<Unknown>".to_owned()
         }
     };
+    if update_username {
+        *bot_state.own_username.lock() = Some(username.clone());
+    }
 
-    let span = tracing::info_span!("handle", user = username);
+    let span = tracing::info_span!("handle", user = username.as_str());
     handle(bot, event, bot_state).instrument(span).await
 }
 
