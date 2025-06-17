@@ -29,6 +29,8 @@ azalea = { git = "https://github.com/azalea-rs/azalea.git", rev = "2992fc6b", de
 azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", rev = "62e5aecd" }
 #azalea-viaversion = { path = "../azalea-viaversion" }
 
+bevy_tasks = "*" # Whatever azalea is using (currently 0.13.0)
+
 parking_lot = "0.12"
 
 # Logging

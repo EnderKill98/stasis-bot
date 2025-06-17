@@ -3043,6 +3043,7 @@ dependencies = [
  "anyhow",
  "azalea 0.10.1 (git+https://github.com/azalea-rs/azalea.git?rev=2992fc6b)",
  "azalea-viaversion",
+ "bevy_tasks",
  "clap",
  "once_cell",
  "parking_lot",
