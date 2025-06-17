@@ -1,18 +1,18 @@
 use crate::{BotState, OPTS};
 use azalea::pathfinder::goals::{XZGoal, YGoal};
+use azalea::player::GameProfileComponent;
 use azalea::{
     ecs::query::With,
     entity::{metadata::Player, Position},
     pathfinder::goals::BlockPosGoal,
     prelude::*,
     world::InstanceName,
-    GameProfileComponent,
 };
 use rand::Rng;
 
 pub fn execute(
     bot: &mut Client,
-    bot_state: &BotState,
+    _bot_state: &BotState,
     sender: String,
     mut command: String,
     args: Vec<String>,
@@ -71,9 +71,9 @@ pub fn execute(
                     z: position.z.floor() as i32,
                 });
                 if OPTS.no_mining {
-                    bot.goto_without_mining(goal);
+                    bot.start_goto_without_mining(goal);
                 } else {
-                    bot.goto(goal)
+                    bot.start_goto(goal)
                 }
                 send_chat(bot, &format!("Walking to your block position, {sender}..."));
             } else {
@@ -134,9 +134,9 @@ pub fn execute(
                     z: components[2],
                 });
                 if OPTS.no_mining {
-                    bot.goto_without_mining(goal);
+                    bot.start_goto_without_mining(goal);
                 } else {
-                    bot.goto(goal)
+                    bot.start_goto(goal)
                 }
                 send_chat(
                     bot,
@@ -152,9 +152,9 @@ pub fn execute(
                     z: components[1],
                 };
                 if OPTS.no_mining {
-                    bot.goto_without_mining(goal);
+                    bot.start_goto_without_mining(goal);
                 } else {
-                    bot.goto(goal)
+                    bot.start_goto(goal)
                 }
                 send_chat(
                     bot,
@@ -164,9 +164,9 @@ pub fn execute(
             } else if components.len() == 1 {
                 let goal = YGoal { y: components[0] };
                 if OPTS.no_mining {
-                    bot.goto_without_mining(goal);
+                    bot.start_goto_without_mining(goal);
                 } else {
-                    bot.goto(goal)
+                    bot.start_goto(goal)
                 }
                 send_chat(bot, &format!("Going to Y {}!", components[0]));
                 Ok(true)

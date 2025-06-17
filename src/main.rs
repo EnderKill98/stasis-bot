@@ -7,30 +7,23 @@ extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::app::PluginGroup;
+use azalea::packet::game::SendPacketEvent;
+use azalea::protocol::packets::game::s_player_action::Action;
+use azalea::protocol::packets::game::ServerboundPlayerAction;
 use azalea::swarm::DefaultSwarmPlugins;
 use azalea::task_pool::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use azalea::{
     core::direction::Direction,
     entity::{metadata::Player, EyeHeight, Pose, Position},
-    inventory::{InventoryComponent, ItemSlot, SetSelectedHotbarSlotEvent},
-    packet_handling::game::SendPacketEvent,
     pathfinder::Pathfinder,
     prelude::*,
-    protocol::packets::game::{
-        serverbound_interact_packet::InteractionHand,
-        serverbound_player_action_packet::ServerboundPlayerActionPacket,
-        serverbound_set_carried_item_packet::ServerboundSetCarriedItemPacket,
-        serverbound_use_item_on_packet::{BlockHit, ServerboundUseItemOnPacket},
-        serverbound_use_item_packet::ServerboundUseItemPacket,
-        ClientboundGamePacket, ServerboundGamePacket,
-    },
-    registry::{EntityKind, Item},
+    protocol::packets::game::{ClientboundGamePacket, ServerboundGamePacket},
+    registry::Item,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    DefaultBotPlugins, DefaultPlugins, GameProfileComponent, JoinOpts, Vec3,
+    DefaultBotPlugins, DefaultPlugins, JoinOpts, Vec3,
 };
 use clap::Parser;
-use mimalloc::MiMalloc;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -47,7 +40,7 @@ use tracing::{Instrument, Level};
 use tracing_subscriber::prelude::*;
 
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[allow(dead_code)]
 pub const EXITCODE_OTHER: i32 = 1; // Due to errors returned and propagated to main result
@@ -199,6 +192,7 @@ fn main() -> Result<()> {
         }
     }
 
+    /*
     let reg = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(
@@ -220,7 +214,7 @@ fn main() -> Result<()> {
         .init();
     } else {
         reg.init();
-    }
+    }*/
 
     let worker_threads = if OPTS.worker_threads == 0 {
         (OPTS.offline_usernames.len() / 8).max(8)
@@ -338,7 +332,7 @@ async fn async_main() -> Result<()> {
             percent: 1.0, // This 1.0 here means "whatever is left over"
         },
     };
-    let mut builder = azalea::swarm::SwarmBuilder::new_without_plugins()
+    let builder = azalea::swarm::SwarmBuilder::new_without_plugins()
         .add_plugins(DefaultPlugins.build().disable::<TaskPoolPlugin>())
         .add_plugins(DefaultBotPlugins)
         .add_plugins(DefaultSwarmPlugins)
@@ -474,10 +468,11 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                 }
             }
         }
+        /*
         Event::Packet(packet) => match packet.as_ref() {
             ClientboundGamePacket::EntityEvent(packet) => {
                 let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
-                if packet.entity_id == my_entity_id && packet.event_id == 35 {
+                if packet.entity_id.0 == my_entity_id && packet.event_id == 35 {
                     // Totem popped!
                     info!("I popped a Totem!");
                     if OPTS.autolog_hp.is_some() {
@@ -511,19 +506,20 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     if packet.food > eat_until_nutrition_over {
                         // Food increased, stop eating
                         bot.ecs.lock().send_event(SendPacketEvent {
-                            entity: bot.entity,
-                            packet: ServerboundGamePacket::PlayerAction(ServerboundPlayerActionPacket {
-                                action: azalea::protocol::packets::game::serverbound_player_action_packet::Action::ReleaseUseItem,
+                            sent_by: bot.entity,
+                            packet: ServerboundGamePacket::PlayerAction(ServerboundPlayerAction {
+                                action: Action::ReleaseUseItem,
                                 pos: Default::default(),
                                 direction: Direction::Down,
-                                sequence: 0,
-                            })
+                                seq: 0,
+                            }),
                         });
                         *bot_state.eating_until_nutrition_over.lock() = None;
                         info!("Finished eating.");
                     }
                 }
 
+                /*
                 if OPTS.auto_eat
                     && eat_until_nutrition_over.is_none()
                     && (packet.food <= 20 - (3 * 2) || (packet.health < 20f32 && packet.food < 20))
@@ -531,7 +527,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     let mut eat_item = None;
 
                     // Find first food item in hotbar
-                    let inv = bot.entity_component::<InventoryComponent>(bot.entity);
+                    let inv = bot.entity_component::<Inventory>(bot.entity);
                     let inv_menu = inv.inventory_menu;
                     for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
                         let item = inv_menu.slot(slot);
@@ -559,31 +555,35 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             entity,
                             slot: eat_hotbar_slot,
                         });
+                        let look_direction = bot.component::<LookDirection>();
                         // In case that the slot differed, the packet was not sent, yet.
                         ecs.send_event_batch([
                             SendPacketEvent {
-                                entity,
+                                sent_by: entity,
                                 packet: ServerboundGamePacket::SetCarriedItem(
-                                    ServerboundSetCarriedItemPacket {
+                                    ServerboundSetCarriedItem {
                                         slot: eat_hotbar_slot as u16,
                                     },
                                 ),
                             },
                             SendPacketEvent {
-                                entity,
-                                packet: ServerboundGamePacket::UseItem(ServerboundUseItemPacket {
+                                sent_by: entity,
+                                packet: ServerboundGamePacket::UseItem(ServerboundUseItem {
                                     hand: InteractionHand::MainHand,
-                                    sequence: 0,
+                                    seq: 0,
+                                    x_rot: look_direction.x_rot,
+                                    y_rot: look_direction.y_rot,
                                 }),
                             },
                         ]);
                         *bot_state.eating_until_nutrition_over.lock() = Some(packet.food);
                         info!("Eating {eat_item_name} in hotbar slot {eat_hotbar_slot}...");
                     }
-                }
+                }*/
             }
             _ => {}
         },
+        */
         Event::Tick => {
             // Chat message test
             bot_state.ticks_since_message += 1;
@@ -655,7 +655,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             _ => **eye_height as f64,
                         };
                         let eye_pos = **pos + Vec3::new(0f64, y_offset, 0f64);
-                        let dist_sqrt = my_eye_pos.distance_to_sqr(pos);
+                        let dist_sqrt = my_eye_pos.distance_squared_to(Vec3::from(pos));
                         if (closest_eye_pos.is_none() || dist_sqrt < closest_dist_sqrt)
                             && dist_sqrt <= (max_dist * max_dist) as f64
                         {
@@ -755,7 +755,7 @@ impl Default for SwarmState {
     }
 }
 
-async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, join_opts: JoinOpts) {
+async fn swarm_rejoin(swarm: Swarm, state: SwarmState, account: Account, join_opts: JoinOpts) {
     let mut reconnect_after_secs = 5;
     loop {
         info!("Reconnecting after {} seconds...", reconnect_after_secs);

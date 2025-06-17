@@ -12,9 +12,6 @@ opt-level = 3
 [profile.dev.package."*"]
 opt-level = 3
 
-#[patch."https://github.com/azalea-rs/azalea-viaversion.git"]
-#azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "ca0e5b0b" }
-
 [dependencies]
 # CLI Opt parsing
 clap = { version = "4", features = ["derive"] }
@@ -27,12 +24,13 @@ anyhow = "1"
 
 # The amazing bot library!
 #azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "ca0e5b0b", default-features = false }
-azalea = { git = "https://github.com/azalea-rs/azalea.git", rev = "2992fc6b", default-features = false }
+#azalea = { git = "https://github.com/azalea-rs/azalea.git", rev = "2992fc6b", default-features = false }
 # Make the amazing bot library even more amazing!
 azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", rev = "62e5aecd" }
 #azalea-viaversion = { path = "../azalea-viaversion" }
 
-bevy_tasks = "*" # Whatever azalea is using (currently 0.13.0)
+azalea = { version = "0.13.0+mc1.21.5", default-features = false, features = [ "log" ]}
+bevy_log = "0.13.0" # Whatever azalea is using
 
 parking_lot = "0.12"
 
@@ -59,3 +57,4 @@ reqwest = { version = "0.12", default-features = false, features = [
 #rustyline = "14"
 
 mimalloc = "0.1"
+#tikv-jemallocator = "0.6"
