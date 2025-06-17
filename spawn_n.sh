@@ -10,7 +10,7 @@ total=$2
 shift
 shift
 
-trap "kill $(jobs -p); exit 1" INT
+#trap "kill $(jobs -p); exit 1" INT
 
 c=0
 list=""
