@@ -426,7 +426,9 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         .unwrap()
                         .to_owned();
                 }
-                dm = Some((sender, message));
+                if message.starts_with('!') {
+                    dm = Some((sender, message));
+                }
             } else if message.starts_with("[") && message.contains("] ") {
                 let sender = message[1..].split("] ").next().unwrap().to_owned();
                 let mut message = message.split("] ").collect::<Vec<_>>()[1].to_owned();
@@ -437,7 +439,9 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         .unwrap()
                         .to_owned();
                 }
-                dm = Some((sender, message));
+                if message.starts_with('!') {
+                    dm = Some((sender, message));
+                }
             }
 
             if let Some((sender, content)) = dm {
