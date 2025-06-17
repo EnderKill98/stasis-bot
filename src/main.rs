@@ -7,22 +7,19 @@ extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::app::PluginGroup;
-use azalea::packet::game::SendPacketEvent;
-use azalea::protocol::packets::game::s_player_action::Action;
-use azalea::protocol::packets::game::ServerboundPlayerAction;
+use azalea::player::GameProfileComponent;
 use azalea::swarm::DefaultSwarmPlugins;
 use azalea::task_pool::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use azalea::{
-    core::direction::Direction,
     entity::{metadata::Player, EyeHeight, Pose, Position},
     pathfinder::Pathfinder,
     prelude::*,
-    protocol::packets::game::{ClientboundGamePacket, ServerboundGamePacket},
     registry::Item,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
     DefaultBotPlugins, DefaultPlugins, JoinOpts, Vec3,
 };
+use bevy_log::LogPlugin;
 use clap::Parser;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -49,7 +46,6 @@ pub const EXITCODE_AUTH_FAILED: i32 = 3;
 pub const EXITCODE_NO_ACCESS_TOKEN: i32 = 4;
 
 pub const EXITCODE_USER_REQUESTED_STOP: i32 = 20; // Using an error code to prevent automatic relaunching in some configurations or scripts
-pub const EXITCODE_LOW_HEALTH_OR_TOTEM_POP: i32 = 69;
 
 /// A simple stasis bot, using azalea!
 #[derive(Parser)]
@@ -61,10 +57,6 @@ struct Opts {
     /// Player names who are considered more trustworthy for certain commands
     #[clap(short, long)]
     admin: Vec<String>,
-
-    /// Automatically log out, once getting to this HP or lower (or a totem pops)
-    #[clap(short = 'H', long)]
-    autolog_hp: Option<f32>,
 
     /// Workaround for crashes: Forbid the bot from sending any messages to players.
     #[clap(short = 'q', long)]
@@ -93,10 +85,6 @@ struct Opts {
     /// Enable looking at the closest player which is no more than N blocks away.
     #[clap(short = 'L', long)]
     look_at_players: Option<u32>,
-
-    /// Enables Automatic Eating food items in hotbar, when appropriate
-    #[clap(long)]
-    auto_eat: bool,
 
     /// How many tokio worker threads to use. 0 = Automatic
     #[clap(short = 't', long, default_value = "0")]
@@ -248,14 +236,6 @@ async fn async_main() -> Result<()> {
         info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
     }
 
-    if let Some(autolog_hp) = OPTS.autolog_hp {
-        info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
-    }
-
-    if OPTS.auto_eat {
-        info!("Automatic Eating is enabled.");
-    }
-
     info!("Admins: {}", OPTS.admin.join(", "));
     info!("Logging in...");
 
@@ -353,10 +333,10 @@ async fn async_main() -> Result<()> {
 #[derive(Clone, Component)]
 pub struct BotState {
     last_dm_handled_at: Arc<Mutex<Option<Instant>>>,
-    eating_until_nutrition_over: Arc<Mutex<Option<u32>>>,
     ticks_since_message: u32,
     message_count: u32,
     inputline_queue: Arc<Mutex<VecDeque<String>>>,
+    own_username: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for BotState {
@@ -365,18 +345,32 @@ impl Default for BotState {
         INPUTLINE_QUEUES.lock().push(inputline_queue.clone());
         Self {
             last_dm_handled_at: Default::default(),
-            eating_until_nutrition_over: Default::default(),
             ticks_since_message: Default::default(),
             message_count: Default::default(),
+            own_username: Arc::new(Mutex::new(None)),
             inputline_queue,
         }
     }
 }
 
 async fn handle_outer(bot: Client, event: Event, bot_state: BotState) -> anyhow::Result<()> {
-    //let span = span!(Level::TRACE, "handle", user = &bot.username());
-    let span = tracing::info_span!("handle", user = &bot.username());
-    //handle(bot, event, bot_state).instrument(span).await
+    // Sometimes the component GameProfileComponent is not available early on, causing worker threads to crash
+    // Also caching the value for hopefully some performance (not sure, maybe it's worse)
+    let username = if let Some(ref username) = *bot_state.own_username.lock() {
+        username.clone()
+    } else {
+        if let Some(username) = bot
+            .get_component::<GameProfileComponent>()
+            .map(|profile| profile.name.clone())
+        {
+            *bot_state.own_username.lock() = Some(username.clone());
+            username
+        } else {
+            "<Unknown>".to_owned()
+        }
+    };
+
+    let span = tracing::info_span!("handle", user = username);
     handle(bot, event, bot_state).instrument(span).await
 }
 
@@ -472,122 +466,6 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                 }
             }
         }
-        /*
-        Event::Packet(packet) => match packet.as_ref() {
-            ClientboundGamePacket::EntityEvent(packet) => {
-                let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
-                if packet.entity_id.0 == my_entity_id && packet.event_id == 35 {
-                    // Totem popped!
-                    info!("I popped a Totem!");
-                    if OPTS.autolog_hp.is_some() {
-                        warn!("Disconnecting and quitting because --autolog-hp is enabled...");
-                        bot.disconnect();
-                        std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
-                    }
-                }
-            }
-            ClientboundGamePacket::SetHealth(packet) => {
-                info!(
-                    "Health: {:.02}, Food: {:.02}, Saturation: {:.02}",
-                    packet.health, packet.food, packet.saturation
-                );
-                if let Some(hp) = OPTS.autolog_hp {
-                    if packet.health <= hp {
-                        warn!("My Health got below {hp:.02}! Disconnecting and quitting...");
-                        bot.disconnect();
-                        std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
-                    }
-                }
-
-                // TODO: Use Attribute::GenericMaxHealth instead of hardcoded 20
-                let eat_until_nutrition_over = bot_state
-                    .eating_until_nutrition_over
-                    .as_ref()
-                    .lock()
-                    .clone();
-                if let Some(eat_until_nutrition_over) = eat_until_nutrition_over {
-                    // Is eating
-                    if packet.food > eat_until_nutrition_over {
-                        // Food increased, stop eating
-                        bot.ecs.lock().send_event(SendPacketEvent {
-                            sent_by: bot.entity,
-                            packet: ServerboundGamePacket::PlayerAction(ServerboundPlayerAction {
-                                action: Action::ReleaseUseItem,
-                                pos: Default::default(),
-                                direction: Direction::Down,
-                                seq: 0,
-                            }),
-                        });
-                        *bot_state.eating_until_nutrition_over.lock() = None;
-                        info!("Finished eating.");
-                    }
-                }
-
-                /*
-                if OPTS.auto_eat
-                    && eat_until_nutrition_over.is_none()
-                    && (packet.food <= 20 - (3 * 2) || (packet.health < 20f32 && packet.food < 20))
-                {
-                    let mut eat_item = None;
-
-                    // Find first food item in hotbar
-                    let inv = bot.entity_component::<Inventory>(bot.entity);
-                    let inv_menu = inv.inventory_menu;
-                    for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
-                        let item = inv_menu.slot(slot);
-                        if let Some(ItemSlot::Present(item_slot)) = item {
-                            if item_slot
-                                .components
-                                .get(azalea::registry::DataComponentKind::Food)
-                                .is_some()
-                                || FOOD_ITEMS.contains(&item_slot.kind)
-                            {
-                                eat_item = Some((
-                                    hotbar_slot as u8,
-                                    format!("{} ({}x)", item_slot.kind, item_slot.count),
-                                ));
-                                break;
-                            }
-                        }
-                    }
-
-                    if let Some((eat_hotbar_slot, eat_item_name)) = eat_item {
-                        // Switch to slot and start eating
-                        let entity = bot.entity;
-                        let mut ecs = bot.ecs.lock();
-                        ecs.send_event(SetSelectedHotbarSlotEvent {
-                            entity,
-                            slot: eat_hotbar_slot,
-                        });
-                        let look_direction = bot.component::<LookDirection>();
-                        // In case that the slot differed, the packet was not sent, yet.
-                        ecs.send_event_batch([
-                            SendPacketEvent {
-                                sent_by: entity,
-                                packet: ServerboundGamePacket::SetCarriedItem(
-                                    ServerboundSetCarriedItem {
-                                        slot: eat_hotbar_slot as u16,
-                                    },
-                                ),
-                            },
-                            SendPacketEvent {
-                                sent_by: entity,
-                                packet: ServerboundGamePacket::UseItem(ServerboundUseItem {
-                                    hand: InteractionHand::MainHand,
-                                    seq: 0,
-                                    x_rot: look_direction.x_rot,
-                                    y_rot: look_direction.y_rot,
-                                }),
-                            },
-                        ]);
-                        *bot_state.eating_until_nutrition_over.lock() = Some(packet.food);
-                        info!("Eating {eat_item_name} in hotbar slot {eat_hotbar_slot}...");
-                    }
-                }*/
-            }
-            _ => {}
-        },
-        */
         Event::Tick => {
             // Chat message test
             bot_state.ticks_since_message += 1;
