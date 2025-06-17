@@ -22,15 +22,9 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 # Easy error handling
 anyhow = "1"
 
-# The amazing bot library!
-#azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "ca0e5b0b", default-features = false }
-#azalea = { git = "https://github.com/azalea-rs/azalea.git", rev = "2992fc6b", default-features = false }
-# Make the amazing bot library even more amazing!
-azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", rev = "62e5aecd" }
-#azalea-viaversion = { path = "../azalea-viaversion" }
-
 bevy_log = "0.16.1" # Whatever azalea is using
-azalea = { version = "0.13.0+mc1.21.5", default-features = false, features = [ "log" ]}
+#azalea = { version = "0.13.0+mc1.21.5", default-features = false, features = [ "log" ]}
+azalea = { git = "https://github.com/EnderKill98/azalea.git", rev = "f7ad2c57", default-features = false, features = [ "log" ]}
 
 parking_lot = "0.12"
 
