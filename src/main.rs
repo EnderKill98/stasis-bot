@@ -42,6 +42,8 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use std::sync::atomic::{AtomicU32, Ordering};
+use azalea::protocol::packets::game::serverbound_swing_packet::ServerboundSwingPacket;
 use tracing_subscriber::prelude::*;
 
 #[allow(dead_code)]
@@ -125,6 +127,10 @@ struct Opts {
     /// Only print access token, then quit. Fancy account refresher for something else.
     #[clap(long)]
     just_print_access_token: bool,
+
+    /// 2b Anti AFK
+    #[clap(long)]
+    periodic_swing: bool,
 }
 
 pub const FOOD_ITEMS: &[Item] = &[
@@ -369,6 +375,7 @@ pub struct BotState {
     return_to_after_pulled: Arc<Mutex<Option<azalea::Vec3>>>,
     last_dm_handled_at: Arc<Mutex<Option<Instant>>>,
     eating_until_nutrition_over: Arc<Mutex<Option<u32>>>,
+    ticks_since_last_swing: Arc<AtomicU32>,
 }
 
 impl BotState {
@@ -442,6 +449,13 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     message.split(" ").next().unwrap().to_owned(),
                     message.split("whispers to you: ").collect::<Vec<_>>()[1].to_owned(),
                 ));
+            } else if message.contains(" whispers: ") {
+                let sender = message.split(" ").next().unwrap().to_owned();
+                let mut message = message.split(" whispers: ").collect::<Vec<_>>()[1].to_owned();
+                if message.ends_with(&sender) {
+                    message = message[..(message.len() - sender.len())].to_owned();
+                }
+                dm = Some((sender, message));
             }
 
             if let Some((sender, content)) = dm {
@@ -674,6 +688,22 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             _ => {}
         },
         Event::Tick => {
+            // 2b2t Anti AFK
+            if OPTS.periodic_swing {
+                let mut ticks = bot_state.ticks_since_last_swing.load(Ordering::Relaxed);
+                ticks += 1;
+                if ticks > 20*30 {
+                    ticks = 0;
+                    bot.ecs.lock().send_event(SendPacketEvent {
+                        entity: bot.entity,
+                        packet: ServerboundGamePacket::Swing(ServerboundSwingPacket {
+                            hand: InteractionHand::MainHand,
+                        }),
+                    });
+                }
+                bot_state.ticks_since_last_swing.store(ticks, Ordering::Relaxed);
+            }
+
             // Execute commands from input queue
             {
                 let mut queue = INPUTLINE_QUEUE.lock();
