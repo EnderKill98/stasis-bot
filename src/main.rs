@@ -7,7 +7,6 @@ extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::app::PluginGroup;
-use azalea::player::GameProfileComponent;
 use azalea::swarm::DefaultSwarmPlugins;
 use azalea::task_pool::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use azalea::{
@@ -17,7 +16,7 @@ use azalea::{
     registry::Item,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    DefaultBotPlugins, DefaultPlugins, JoinOpts, Vec3,
+    DefaultBotPlugins, DefaultPlugins, GameProfileComponent, JoinOpts, Vec3,
 };
 use bevy_log::LogPlugin;
 use clap::Parser;
@@ -545,7 +544,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             _ => **eye_height as f64,
                         };
                         let eye_pos = **pos + Vec3::new(0f64, y_offset, 0f64);
-                        let dist_sqrt = my_eye_pos.distance_squared_to(Vec3::from(pos));
+                        let dist_sqrt = my_eye_pos.distance_squared_to(pos);
                         if (closest_eye_pos.is_none() || dist_sqrt < closest_dist_sqrt)
                             && dist_sqrt <= (max_dist * max_dist) as f64
                         {

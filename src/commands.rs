@@ -1,12 +1,12 @@
 use crate::{BotState, OPTS};
 use azalea::pathfinder::goals::{XZGoal, YGoal};
-use azalea::player::GameProfileComponent;
 use azalea::{
     ecs::query::With,
     entity::{metadata::Player, Position},
     pathfinder::goals::BlockPosGoal,
     prelude::*,
     world::InstanceName,
+    GameProfileComponent,
 };
 use rand::Rng;
 
@@ -71,9 +71,9 @@ pub fn execute(
                     z: position.z.floor() as i32,
                 });
                 if OPTS.no_mining {
-                    bot.start_goto_without_mining(goal);
+                    bot.goto_without_mining(goal);
                 } else {
-                    bot.start_goto(goal)
+                    bot.goto(goal)
                 }
                 send_chat(bot, &format!("Walking to your block position, {sender}..."));
             } else {
@@ -134,9 +134,9 @@ pub fn execute(
                     z: components[2],
                 });
                 if OPTS.no_mining {
-                    bot.start_goto_without_mining(goal);
+                    bot.goto_without_mining(goal);
                 } else {
-                    bot.start_goto(goal)
+                    bot.goto(goal)
                 }
                 send_chat(
                     bot,
@@ -152,9 +152,9 @@ pub fn execute(
                     z: components[1],
                 };
                 if OPTS.no_mining {
-                    bot.start_goto_without_mining(goal);
+                    bot.goto_without_mining(goal);
                 } else {
-                    bot.start_goto(goal)
+                    bot.goto(goal)
                 }
                 send_chat(
                     bot,
@@ -164,9 +164,9 @@ pub fn execute(
             } else if components.len() == 1 {
                 let goal = YGoal { y: components[0] };
                 if OPTS.no_mining {
-                    bot.start_goto_without_mining(goal);
+                    bot.goto_without_mining(goal);
                 } else {
-                    bot.start_goto(goal)
+                    bot.goto(goal)
                 }
                 send_chat(bot, &format!("Going to Y {}!", components[0]));
                 Ok(true)
@@ -263,14 +263,11 @@ pub fn resolve_pos(own_pos: azalea::BlockPos, args: &[&str]) -> anyhow::Result<V
 
         // start and end are both inclusive
         let (mut start, mut end) = if component.contains("..=") {
-            let start_end: Vec<_> = component.split("..=").collect();
-            (start_end[0].parse::<i32>()?, start_end[1].parse::<i32>()?)
+            let end: Vec<_> = component.split("..=").collect();
+            (end[0].parse::<i32>()?, end[1].parse::<i32>()?)
         } else if component.contains("..") {
-            let start_end: Vec<_> = component.split("..").collect();
-            (
-                start_end[0].parse::<i32>()?,
-                start_end[1].parse::<i32>()? - 1,
-            )
+            let end: Vec<_> = component.split("..").collect();
+            (end[0].parse::<i32>()?, end[1].parse::<i32>()? - 1)
         } else {
             let val = component.parse::<i32>()?;
             (val, val)
