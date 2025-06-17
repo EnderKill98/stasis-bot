@@ -30,6 +30,7 @@ use azalea::{
     DefaultBotPlugins, DefaultPlugins, GameProfileComponent, JoinOpts, Vec3,
 };
 use clap::Parser;
+use mimalloc::MiMalloc;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -44,6 +45,9 @@ use std::{
 };
 use tracing::{Instrument, Level};
 use tracing_subscriber::prelude::*;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[allow(dead_code)]
 pub const EXITCODE_OTHER: i32 = 1; // Due to errors returned and propagated to main result
@@ -306,15 +310,15 @@ async fn async_main() -> Result<()> {
 
         // Use 25% of cores for async compute, at least 1, no more than 4
         async_compute: TaskPoolThreadAssignmentPolicy {
-            min_threads: if OPTS.compute_threads == 0 {
+            min_threads: if OPTS.async_compute_threads == 0 {
                 (OPTS.offline_usernames.len() / 4).max(4)
             } else {
-                OPTS.compute_threads
+                OPTS.async_compute_threads
             },
-            max_threads: if OPTS.compute_threads == 0 {
+            max_threads: if OPTS.async_compute_threads == 0 {
                 (OPTS.offline_usernames.len() / 4).max(4)
             } else {
-                OPTS.compute_threads
+                OPTS.async_compute_threads
             },
             percent: 0.25,
         },

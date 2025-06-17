@@ -6,6 +6,8 @@ authors = ["EnderKill98"]
 
 [profile.dev]
 opt-level = 1
+[profile.release]
+opt-level = 3
 [profile.dev.package."*"]
 opt-level = 3
 
@@ -54,3 +56,5 @@ reqwest = { version = "0.12", default-features = false, features = [
 
 # Easy command input
 #rustyline = "14"
+
+mimalloc = "0.1"
