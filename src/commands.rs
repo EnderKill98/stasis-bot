@@ -1,4 +1,4 @@
-use crate::{BotState, OPTS};
+use crate::{BlockPos, BotState, OPTS};
 use azalea::{
     ecs::query::With,
     entity::{metadata::Player, Position},
@@ -7,6 +7,8 @@ use azalea::{
     world::InstanceName,
     GameProfileComponent, Vec3,
 };
+use azalea::pathfinder::goals::{Goal, XZGoal, YGoal};
+use rand::Rng;
 
 pub fn execute(
     bot: &mut Client,
@@ -19,39 +21,30 @@ pub fn execute(
         command.remove(0);
     }
     command = command.to_lowercase();
-    let sender_is_admin = OPTS.admin.iter().any(|a| sender.eq_ignore_ascii_case(a));
+    let sender_is_admin = OPTS.admin.iter().any(|a| sender.eq_ignore_ascii_case(a) || a == "*") || OPTS.admin.is_empty();
 
     match command.as_str() {
         "help" => {
-            let mut commands = vec!["!help", "!about"];
-            if !OPTS.no_stasis {
-                commands.push("!tp");
-            }
+            let mut commands = vec!["!help", "!about", "!admins"];
             if sender_is_admin {
-                commands.append(&mut vec!["!comehere", "!say", "!stop"]);
-                if OPTS.enable_pos_command {
-                    commands.push("!pos");
-                }
-            }
-            if !OPTS.admin.is_empty() {
-                commands.push("!admins");
+                commands.append(&mut vec!["!comehere", "!say", "!stop", "!pos", "!goto", "!cancel"]);
             }
             commands.sort();
 
-            send_command(
+            send_chat(
                 bot,
-                &format!("msg {sender} Commands: {}", commands.join(", ")),
+                &format!("Commands: {}", commands.join(", ")),
             );
             Ok(true)
         }
         "about" => {
-            send_command(bot, &format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot {}: github.com/EnderKill98/stasis-bot", env!("CARGO_PKG_VERSION")));
+            send_chat(bot, &format!("Hi {sender}, I'm running EnderKill98's azalea-based stasis-bot {}: github.com/EnderKill98/stasis-bot", env!("CARGO_PKG_VERSION")));
             Ok(true)
         }
-        "tp" => {
+        /*"tp" => {
             let remembered_trapdoor_positions = bot_state.remembered_trapdoor_positions.lock();
             if OPTS.no_stasis {
-                send_command(
+                send_chat(
                     bot,
                     &format!("msg {sender} I'm not allowed to do pearl duties :(..."),
                 );
@@ -60,10 +53,10 @@ pub fn execute(
 
             if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
                 if bot_state.pathfinding_requested_by.lock().is_some() {
-                    send_command(bot, &format!("msg {sender} Please ask again in a bit. I'm currently already going somewhere..."));
+                    send_chat(bot, &format!("msg {sender} Please ask again in a bit. I'm currently already going somewhere..."));
                     return Ok(true);
                 }
-                send_command(
+                send_chat(
                     bot,
                     &format!("msg {sender} Walking to your stasis chamber..."),
                 );
@@ -83,17 +76,17 @@ pub fn execute(
                 }
                 *bot_state.pathfinding_requested_by.lock() = Some(sender.clone());
             } else {
-                send_command(
+                send_chat(
                     bot,
                     &format!("msg {sender} I'm not aware whether you have a pearl here. Sorry!"),
                 );
             }
 
             Ok(true)
-        }
+        }*/
         "comehere" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_chat(bot, &format!("Sorry, but you need to be specified as an admin to use this command!"));
                 return Ok(true);
             }
 
@@ -112,28 +105,106 @@ pub fn execute(
                 } else {
                     bot.goto(goal)
                 }
-                send_command(
+                send_chat(
                     bot,
-                    &format!("msg {sender} Walking to your block position..."),
+                    &format!("Walking to your block position, {sender}..."),
                 );
             } else {
-                send_command(
+                send_chat(
                     bot,
-                    &format!("msg {sender} I could not find you in my render distance!"),
+                    &format!("I could not find you in my render distance, {sender}!"),
                 );
             }
             Ok(true)
         }
-        "admins" => {
-            send_command(
+        "cancel" => {
+            if !sender_is_admin {
+                send_chat(bot, &format!("Sorry, but you need to be specified as an admin to use this command!"));
+                return Ok(true);
+            }
+
+            bot.stop_pathfinding();
+            send_chat(
                 bot,
-                &format!("msg {sender} Admins: {}", OPTS.admin.join(", ")),
+                &format!("Cancelled pathfinding!"),
+            );
+            Ok(true)
+        }
+        "goto" => {
+            if !sender_is_admin {
+                send_chat(bot, &format!("Sorry, but you need to be specified as an admin to use this command!"));
+                return Ok(true);
+            }
+
+            let own_pos = bot.component::<Position>();
+            let own_block_pos = azalea::BlockPos {
+                x: own_pos.x.floor() as i32,
+                y: own_pos.y.floor() as i32,
+                z: own_pos.z.floor() as i32,
+            };
+            let components = match resolve_pos(own_block_pos, &args.iter().map(|arg| arg.as_str()).collect::<Vec<_>>()) {
+                Ok(components) => components,
+                Err(err) => {
+                    send_chat(bot, &format!("Failed to parse coords: {err}"));
+                    error!("Failed to parse coords: {err:?}");
+                    return Ok(true);
+                }
+            };
+            if components.len() == 3 {
+                let goal = BlockPosGoal(azalea::BlockPos {
+                    x: components[0],
+                    y: components[1],
+                    z: components[2],
+                });
+                if OPTS.no_mining {
+                    bot.goto_without_mining(goal);
+                } else {
+                    bot.goto(goal)
+                }
+                send_chat(
+                    bot,
+                    &format!("Going to {} {} {}!", components[0], components[1], components[2]),
+                );
+                Ok(true)
+            } else if components.len() == 2 {
+                let goal = XZGoal { x: components[0], z: components[1] };
+                if OPTS.no_mining {
+                    bot.goto_without_mining(goal);
+                } else {
+                    bot.goto(goal)
+                }
+                send_chat(
+                    bot,
+                    &format!("Going to XZ {} {}!", components[0], components[1]),
+                );
+                Ok(true)
+            } else if components.len() == 1 {
+                let goal = YGoal{ y: components[0] };
+                if OPTS.no_mining {
+                    bot.goto_without_mining(goal);
+                } else {
+                    bot.goto(goal)
+                }
+                send_chat(
+                    bot,
+                    &format!("Going to Y {}!", components[0]),
+                );
+                Ok(true)
+            }else {
+                send_chat(bot, "Expecting coordinates as either X Y Z, X Z or Y. Component examples: ~5, -100, 10..150, ~1..=100");
+                Ok(true)
+            }
+        }
+        "admins" => {
+            send_chat(
+                bot,
+                &format!("Admins: {}", OPTS.admin.join(", ")),
             );
             Ok(true)
         }
         "say" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_chat(bot, &format!("Sorry, but you need to be specified as an admin to use this command!"));
                 return Ok(true);
             }
 
@@ -149,7 +220,7 @@ pub fn execute(
         }
         "stop" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_chat(bot, &format!("Sorry, but you need to be specified as an admin to use this command!"));
                 return Ok(true);
             }
 
@@ -158,17 +229,13 @@ pub fn execute(
         }
         "pos" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
-                return Ok(true);
-            }
-            if !OPTS.enable_pos_command {
-                send_command(bot, &format!("msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"));
+                send_chat(bot, &format!("Sorry, but you need to be specified as an admin to use this command!"));
                 return Ok(true);
             }
 
             let pos = bot.component::<Position>();
             let world_name = bot.component::<InstanceName>();
-            send_command(
+            send_chat(
                 bot,
                 &format!(
                     "msg {sender} I'm at {:.03} {:.03} {:.03} in {}",
@@ -182,11 +249,90 @@ pub fn execute(
     }
 }
 
+pub fn resolve_pos(own_pos: azalea::BlockPos, args: &[&str]) -> anyhow::Result<Vec<i32>> {
+    let mut resolved = vec![];
+    for component in args.into_iter() {
+        let mut component = (*component).to_owned();
+        let is_relative = if component.starts_with("~") {
+            component.remove(0);
+            true
+        }else {
+            false
+        };
+        if component.ends_with(",") {
+            component = component[..component.len() - 1].to_string();
+        }
+        if component.is_empty() {
+            component = String::from("0");
+        }
+
+        // start and end are both inclusive
+        let (mut start, mut end) = if component.contains("..=") {
+            let start_end: Vec<_> = component.split("..=").collect();
+            (start_end[0].parse::<i32>()?, start_end[1].parse::<i32>()?)
+        } else if component.contains("..") {
+            let start_end: Vec<_> = component.split("..").collect();
+            (start_end[0].parse::<i32>()?, start_end[1].parse::<i32>()? - 1)
+        }else {
+            let val = component.parse::<i32>()?;
+            (val, val)
+        };
+
+        if start > end {
+            (end, start) = (end, start);
+        }
+
+        if start == end {
+            resolved.push((is_relative, start));
+        }else {
+            // Get random value in range
+            resolved.push((is_relative, rand::rng().random_range(start..=end)));
+        }
+    }
+
+    if resolved.len() == 1 {
+        // <Y>
+        if resolved[0].0 {
+            resolved[0].1 = own_pos.y + resolved[0].1;
+        }
+    }else if resolved.len() == 2 {
+        // <X> <Z>
+        if resolved[0].0 {
+            resolved[0].1 = own_pos.x + resolved[0].1;
+        }
+        if resolved[1].0 {
+            resolved[1].1 = own_pos.z + resolved[1].1;
+        }
+    }else if resolved.len() == 3 {
+        // <X> <Y> <Z>
+        if resolved[0].0 {
+            resolved[0].1 = own_pos.x + resolved[0].1;
+        }
+        if resolved[1].0 {
+            resolved[1].1 = own_pos.y + resolved[1].1;
+        }
+        if resolved[2].0 {
+            resolved[2].1 = own_pos.z + resolved[2].1;
+        }
+    }
+
+    Ok(resolved.into_iter().map(|(_is_relative, value)| value).collect())
+}
+
 pub fn send_command(bot: &mut Client, command: &str) {
     if OPTS.quiet {
         info!("Quiet mode: Supressed sending command: {command}");
     } else {
         info!("Sending command: {command}");
         bot.send_command_packet(command);
+    }
+}
+
+pub fn send_chat(bot: &mut Client, chat: &str) {
+    if OPTS.quiet {
+        info!("Quiet mode: Supressed sending chat: {chat}");
+    } else {
+        info!("Sending chat: {chat}");
+        bot.send_chat_packet(chat);
     }
 }

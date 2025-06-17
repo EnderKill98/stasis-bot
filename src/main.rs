@@ -1,14 +1,12 @@
 #![feature(let_chains)]
 
 pub mod commands;
-pub mod plugins;
 
 #[macro_use]
 extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::{
-    auth::AuthResult,
     blocks::Block,
     core::direction::Direction,
     ecs::query::With,
@@ -35,7 +33,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{VecDeque},
     fmt::Debug,
     io::IsTerminal,
     path::PathBuf,
@@ -43,8 +41,8 @@ use std::{
     time::{Duration, Instant},
 };
 use std::sync::atomic::{AtomicU32, Ordering};
-use azalea::protocol::packets::game::serverbound_swing_packet::ServerboundSwingPacket;
 use tracing_subscriber::prelude::*;
+use tracing::{Instrument, Level};
 
 #[allow(dead_code)]
 pub const EXITCODE_OTHER: i32 = 1; // Due to errors returned and propagated to main result
@@ -66,11 +64,6 @@ struct Opts {
     #[clap(short, long)]
     admin: Vec<String>,
 
-    /// Use ViaProxy to translate the protocol to the given minecraft version.
-    /// Conflicts with --openauthmod
-    #[clap(short, long)]
-    via: Option<String>,
-
     /// Automatically log out, once getting to this HP or lower (or a totem pops)
     #[clap(short = 'H', long)]
     autolog_hp: Option<f32>,
@@ -78,10 +71,6 @@ struct Opts {
     /// Workaround for crashes: Forbid the bot from sending any messages to players.
     #[clap(short = 'q', long)]
     quiet: bool,
-
-    /// Make the stasis bot, not do any stasis-related duties. So you can abuse him easier as an afk bot.
-    #[clap(short = 'S', long)]
-    no_stasis: bool,
 
     /// Specify a logfile to log everything into as well
     #[clap(short = 'l', long)]
@@ -95,14 +84,9 @@ struct Opts {
     #[clap(short = 's', long)]
     sign_chat: bool,
 
-    /// Use an offline account with specified user name.
-    #[clap(long)]
-    offline_username: Option<String>,
-
-    /// Use OpenAuthMod. Enables using this account across proxies like ViaProxy.
-    /// Conflicts with --via
-    #[clap(short = 'A', long)]
-    openauthmod: bool,
+    /// Use offline accounts with specified user name.
+    #[clap(short = 'u', long)]
+    offline_usernames: Vec<String>,
 
     /// Forbid pathfinding to mine blocks to reach its goal
     #[clap(short = 'M', long)]
@@ -112,25 +96,9 @@ struct Opts {
     #[clap(short = 'L', long)]
     look_at_players: Option<u32>,
 
-    /// Enable a command, that allows admins to get the position of the bot. Might be dangerous!
-    #[clap(long)]
-    enable_pos_command: bool,
-
     /// Enables Automatic Eating food items in hotbar, when appropriate
     #[clap(long)]
     auto_eat: bool,
-
-    /// File, used to store authentication information in. Ignored if --offline-username is used.
-    #[clap(long, default_value = "login-secrets.json")]
-    auth_file: PathBuf,
-
-    /// Only print access token, then quit. Fancy account refresher for something else.
-    #[clap(long)]
-    just_print_access_token: bool,
-
-    /// 2b Anti AFK
-    #[clap(long)]
-    periodic_swing: bool,
 }
 
 pub const FOOD_ITEMS: &[Item] = &[
@@ -231,100 +199,29 @@ async fn main() -> Result<()> {
         reg.init();
     }
 
-    if OPTS.openauthmod && OPTS.via.is_some() {
-        error!("-v/--via and -A/--openauthmod cannot be used together! Choose only one.");
-        std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
+    if OPTS.no_color {
+        info!("Will not use colored chat messages and disabled ansi formatting in console.");
     }
 
-    if !OPTS.just_print_access_token {
-        if OPTS.offline_username.is_none() {
-            info!(
-                "File used to store Authentication information: {:?}",
-                OPTS.auth_file
-            );
-        }
-
-        if OPTS.no_color {
-            info!("Will not use colored chat messages and disabled ansi formatting in console.");
-        }
-
-        if OPTS.quiet {
-            info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
-        }
-
-        if let Some(autolog_hp) = OPTS.autolog_hp {
-            info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
-        }
-
-        if OPTS.no_stasis {
-            info!("Will not perform any stasis duties!");
-        }
-
-        if OPTS.enable_pos_command {
-            info!("The command !pos has been enabled for admins!");
-        }
-
-        if OPTS.auto_eat {
-            info!("Automatic Eating is enabled.");
-        }
-
-        info!("Admins: {}", OPTS.admin.join(", "));
-        info!("Logging in...");
+    if OPTS.quiet {
+        info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
     }
 
-    let mut account = if let Some(offline_username) = &OPTS.offline_username {
-        if OPTS.just_print_access_token {
-            error!("Can't print an access token for an offline account!");
-            std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
-        }
-        info!("Using an offline account with username {offline_username:?}!");
-        Account::offline(&offline_username)
-    } else {
-        let auth_result = match auth().await {
-            Ok(result) => result,
-            Err(err) => {
-                error!("Quiting because failed to authenticate: {err:?}");
-                std::process::exit(EXITCODE_AUTH_FAILED);
-            }
-        };
-        azalea::Account {
-            username: auth_result.profile.name,
-            access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
-            uuid: Some(auth_result.profile.id),
-            account_opts: azalea::AccountOpts::Microsoft {
-                email: "default".to_owned(),
-            },
-            // we don't do chat signing by default unless the user asks for it
-            certs: None,
-        }
-    };
-
-    // Print access token and exit, if requested
-    if OPTS.just_print_access_token {
-        if let Some(access_token) = account.access_token {
-            println!("{}", access_token.lock());
-            std::process::exit(0);
-        }else {
-            error!("Failed to find access token!");
-            std::process::exit(EXITCODE_NO_ACCESS_TOKEN);
-        }
+    if let Some(autolog_hp) = OPTS.autolog_hp {
+        info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
     }
 
-    if OPTS.sign_chat {
-        account
-            .request_certs()
-            .await
-            .context("Request certs for chat signing")?;
-        info!("Chat signing is enabled. Retreived certs for it.");
+    if OPTS.auto_eat {
+        info!("Automatic Eating is enabled.");
     }
+    
+    info!("Admins: {}", OPTS.admin.join(", "));
+    info!("Logging in...");
 
-    info!(
-        "Logged in as {}. Connecting to \"{}\"...",
-        account.username, OPTS.server_address
-    );
+    let accounts: Vec<Account> = OPTS.offline_usernames.iter().map(|username| Account::offline(username)).collect();
 
     // Read input and put in queue
-    if std::io::stdin().is_terminal() {
+    /*if std::io::stdin().is_terminal() {
         std::thread::spawn(|| loop {
             let mut line = String::new();
             if let Err(err) = std::io::stdin().read_line(&mut line) {
@@ -335,20 +232,12 @@ async fn main() -> Result<()> {
 
             INPUTLINE_QUEUE.lock().push_back(line.to_owned());
         });
-    }
+    }*/
 
     let mut builder = azalea::swarm::SwarmBuilder::new()
-        .set_handler(handle)
+        .set_handler(handle_outer)
         .set_swarm_handler(swarm_handle)
-        .add_account(account.clone());
-    if let Some(via) = &OPTS.via {
-        info!("Using ViaProxy to translate the protocol to minecraft version {via}...");
-        builder = builder.add_plugins(azalea_viaversion::ViaVersionPlugin::start(via).await);
-    }
-    if OPTS.openauthmod {
-        info!("Using OpenAuthMod authentication protocol. If you connect over a proxy, it can see this traffic!");
-        builder = builder.add_plugins(plugins::openauthmod::OpenAuthModPlugin::default());
-    }
+        .add_accounts(accounts);
     // if OPTS.no_fall:
     // builder = builder.add_plugins(plugins::nofall::NoFallPlugin::default());
     builder
@@ -357,73 +246,28 @@ async fn main() -> Result<()> {
         .context("Running bot")?
 }
 
-async fn auth() -> Result<AuthResult> {
-    Ok(azalea::auth::auth(
-        "default",
-        azalea::auth::AuthOpts {
-            cache_file: Some(OPTS.auth_file.clone()),
-            ..Default::default()
-        },
-    )
-    .await?)
-}
-
 #[derive(Default, Clone, Component)]
 pub struct BotState {
-    remembered_trapdoor_positions: Arc<Mutex<HashMap<String, BlockPos>>>,
-    pathfinding_requested_by: Arc<Mutex<Option<String>>>,
-    return_to_after_pulled: Arc<Mutex<Option<azalea::Vec3>>>,
     last_dm_handled_at: Arc<Mutex<Option<Instant>>>,
     eating_until_nutrition_over: Arc<Mutex<Option<u32>>>,
-    ticks_since_last_swing: Arc<AtomicU32>,
+    ticks_since_message: u32,
+    message_count: u32,
 }
 
 impl BotState {
     pub fn remembered_trapdoor_positions_path() -> PathBuf {
         PathBuf::from("remembered-trapdoor-positions.json")
     }
-
-    pub async fn load_stasis(&mut self) -> Result<()> {
-        let remembered_trapdoor_positions_path = Self::remembered_trapdoor_positions_path();
-        if remembered_trapdoor_positions_path.exists()
-            && !remembered_trapdoor_positions_path.is_dir()
-        {
-            *self.remembered_trapdoor_positions.lock() = serde_json::from_str(
-                &tokio::fs::read_to_string(remembered_trapdoor_positions_path)
-                    .await
-                    .context("Read remembered_trapdoor_positions file")?,
-            )
-            .context("Parsing remembered_trapdoor_positions content")?;
-            info!(
-                "Loaded {} remembered trapdoor positions from file.",
-                self.remembered_trapdoor_positions.lock().len()
-            );
-        } else {
-            *self.remembered_trapdoor_positions.lock() = Default::default();
-            warn!("File for rememembered trapdoor positions doesn't exist, yet.");
-        };
-
-        Ok(())
-    }
-
-    pub async fn save_stasis(&self) -> Result<()> {
-        let json =
-            serde_json::to_string_pretty(&*self.remembered_trapdoor_positions.as_ref().lock())
-                .context("Convert remembered_trapdoor_positions to json")?;
-        tokio::fs::write(Self::remembered_trapdoor_positions_path(), json)
-            .await
-            .context("Save remembered_trapdoor_positions as file")?;
-        Ok(())
-    }
+}
+async fn handle_outer(bot: Client, event: Event, bot_state: BotState) -> anyhow::Result<()> {
+    let span = span!(Level::INFO, "handle", user = &bot.username());
+    handle(bot, event, bot_state).instrument(span).await
 }
 
 async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyhow::Result<()> {
     match event {
         Event::Login => {
-            if !OPTS.no_stasis {
-                info!("Loading remembered trapdoor positions...");
-                bot_state.load_stasis().await?;
-            }
+            info!("Logged in");
         }
         Event::Chat(packet) => {
             info!(
@@ -454,6 +298,20 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                 let mut message = message.split(" whispers: ").collect::<Vec<_>>()[1].to_owned();
                 if message.ends_with(&sender) {
                     message = message[..(message.len() - sender.len())].to_owned();
+                }
+                dm = Some((sender, message));
+            } else if message.starts_with("<") && message.contains("> ") {
+                let sender = message[1..].split("> ").next().unwrap().to_owned();
+                let mut message = message.split("> ").collect::<Vec<_>>()[1].to_owned();
+                if message.contains(&format!("<{sender}> ")) {
+                    message = message.split(&format!("<{sender}> ")).next().unwrap().to_owned();
+                }
+                dm = Some((sender, message));
+            } else if message.starts_with("[") && message.contains("] ") {
+                let sender = message[1..].split("] ").next().unwrap().to_owned();
+                let mut message = message.split("] ").collect::<Vec<_>>()[1].to_owned();
+                if message.contains(&format!("[{sender}] ")) {
+                    message = message.split(&format!("[{sender}] ")).next().unwrap().to_owned();
                 }
                 dm = Some((sender, message));
             }
@@ -487,97 +345,6 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             }
         }
         Event::Packet(packet) => match packet.as_ref() {
-            ClientboundGamePacket::AddEntity(packet) => {
-                if !OPTS.no_stasis && packet.entity_type == EntityKind::EnderPearl {
-                    let owning_player_entity_id = packet.data;
-                    let mut bot = bot.clone();
-                    let entity = bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(
-                        |(entity_id,): &(&MinecraftEntityId,)| {
-                            entity_id.0 as i32 == owning_player_entity_id
-                        },
-                    );
-                    if let Some(entity) = entity {
-                        let game_profile = bot.entity_component::<GameProfileComponent>(entity);
-                        info!(
-                            "{} threw an EnderPearl at {}",
-                            game_profile.name, packet.position
-                        );
-                        let mut found_trapdoor = None;
-
-                        {
-                            let world = bot.world();
-                            let world = world.read();
-                            for y_offset_abs in 0..16 {
-                                for y_offset_mult in [1, -1] {
-                                    let y_offset = y_offset_abs * y_offset_mult;
-                                    let azalea_block_pos = azalea::BlockPos::new(
-                                        packet.position.x.floor() as i32,
-                                        packet.position.y.floor() as i32 + y_offset,
-                                        packet.position.z.floor() as i32,
-                                    );
-                                    if let Some(state) = world.get_block_state(&azalea_block_pos) {
-                                        let block = Box::<dyn Block>::from(state);
-                                        if block.id().ends_with("_trapdoor") {
-                                            info!(
-                                                "Detected trapdoor at {} for pearl thrown by {}",
-                                                azalea_block_pos, game_profile.name
-                                            );
-                                            found_trapdoor = Some(BlockPos::from(azalea_block_pos));
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if let Some(block_pos) = found_trapdoor {
-                            if bot_state
-                                .remembered_trapdoor_positions
-                                .lock()
-                                .get(&game_profile.name)
-                                != Some(&block_pos)
-                            {
-                                let mut remembered_trapdoor_positions =
-                                    bot_state.remembered_trapdoor_positions.lock();
-                                // Remove postions at same trapdoor
-                                for playername in remembered_trapdoor_positions
-                                    .keys()
-                                    .map(|p| p.to_owned())
-                                    .collect::<Vec<_>>()
-                                {
-                                    if remembered_trapdoor_positions.get(&playername)
-                                        == Some(&block_pos)
-                                    {
-                                        info!("Found that {playername} is already using that trapdoor position. Removed that player!");
-                                        remembered_trapdoor_positions.remove(&playername);
-                                    }
-                                }
-                                remembered_trapdoor_positions
-                                    .insert(game_profile.name.clone(), block_pos);
-
-                                if !OPTS.quiet {
-                                    bot.send_command_packet(&format!("msg {} You have thrown a pearl. Message me \"tp\" to get back here.", game_profile.name));
-                                }
-                                let bot_state = bot_state.clone();
-                                tokio::spawn(async move {
-                                    match bot_state
-                                    .save_stasis()
-                                    .await {
-                                        Ok(_) => info!("Saved remembered trapdoor positions to file."),
-                                        Err(err) => error!("Failed to save remembered trapdoor positions to file: {err:?}"),
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-                if packet.entity_type == EntityKind::Player {
-                    /*info!(
-                        "A player appeared at {} with entity id {}",
-                        packet.position, packet.id
-                    );*/
-                }
-            }
             ClientboundGamePacket::EntityEvent(packet) => {
                 let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
                 if packet.entity_id == my_entity_id && packet.event_id == 35 {
@@ -688,20 +455,13 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             _ => {}
         },
         Event::Tick => {
-            // 2b2t Anti AFK
-            if OPTS.periodic_swing {
-                let mut ticks = bot_state.ticks_since_last_swing.load(Ordering::Relaxed);
-                ticks += 1;
-                if ticks > 20*30 {
-                    ticks = 0;
-                    bot.ecs.lock().send_event(SendPacketEvent {
-                        entity: bot.entity,
-                        packet: ServerboundGamePacket::Swing(ServerboundSwingPacket {
-                            hand: InteractionHand::MainHand,
-                        }),
-                    });
-                }
-                bot_state.ticks_since_last_swing.store(ticks, Ordering::Relaxed);
+            // Chat message test
+            bot_state.ticks_since_message += 1;
+            if bot_state.ticks_since_message >= 40 {
+                bot_state.ticks_since_message = 0;
+                bot.send_chat_packet(&format!("Hello {}!", bot_state.message_count));
+                bot_state.message_count += 1;
+                info!("Sent message");
             }
 
             // Execute commands from input queue
@@ -768,6 +528,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                 }
             }
 
+            /*
             let mut pathfinding_requested_by = bot_state.pathfinding_requested_by.lock();
             if let Some(ref requesting_player) = *pathfinding_requested_by {
                 let mut ecs = bot.ecs.lock();
@@ -835,7 +596,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         });
                     }
                 }
-            }
+            }*/
         }
         _ => {}
     }
@@ -844,40 +605,17 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
 }
 
 #[derive(Clone, Component, Resource)]
-pub struct SwarmState {
-    last_account_refresh: Arc<Mutex<Instant>>,
-}
+pub struct SwarmState { }
 
 impl Default for SwarmState {
     fn default() -> Self {
-        Self {
-            last_account_refresh: Arc::new(Mutex::new(Instant::now())),
-        }
+        Self { }
     }
 }
 
 async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, join_opts: JoinOpts) {
     let mut reconnect_after_secs = 5;
     loop {
-        let last_refreshed = state.last_account_refresh.lock().elapsed();
-        if last_refreshed > Duration::from_secs(/*3h*/ 60 * 60 * 3)
-            && let Some(access_token) = account.access_token.clone()
-        {
-            info!("This account's access token is more than hours old. Refreshing it!");
-            let auth_result = auth().await;
-            match auth_result {
-                Ok(result) => {
-                    info!("Got new access token!");
-                    *access_token.lock() = result.access_token;
-                    *state.last_account_refresh.lock() = Instant::now();
-                }
-                Err(err) => {
-                    error!("Quitting, because could not get new access token: {err:?}");
-                    std::process::exit(EXITCODE_AUTH_FAILED);
-                }
-            }
-        }
-
         info!("Reconnecting after {} seconds...", reconnect_after_secs);
 
         tokio::time::sleep(Duration::from_secs(reconnect_after_secs)).await;
@@ -902,7 +640,7 @@ async fn swarm_handle(swarm: Swarm, event: SwarmEvent, state: SwarmState) -> any
                 state.clone(),
                 (*account).clone(),
                 join_opts.clone(),
-            ));
+            ).instrument(span!(Level::INFO, "swarm_rejoin", user = &account.username)));
         }
         _ => {}
     }
