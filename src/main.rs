@@ -203,7 +203,7 @@ fn main() -> Result<()> {
     }
 
     let worker_threads = if OPTS.worker_threads == 0 {
-        (OPTS.offline_usernames.len() / 6).max(4)
+        (OPTS.offline_usernames.len() / 3).max(4)
     } else {
         OPTS.worker_threads
     };
