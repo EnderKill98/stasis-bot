@@ -203,7 +203,7 @@ fn main() -> Result<()> {
     }
 
     let worker_threads = if OPTS.worker_threads == 0 {
-        (OPTS.offline_usernames.len() / 8).max(8)
+        (OPTS.offline_usernames.len() / 6).max(4)
     } else {
         OPTS.worker_threads
     };
@@ -268,12 +268,12 @@ async fn async_main() -> Result<()> {
         // Use 25% of cores for IO, at least 1, no more than 4
         io: TaskPoolThreadAssignmentPolicy {
             min_threads: if OPTS.io_threads == 0 {
-                (OPTS.offline_usernames.len() / 4).max(4)
+                (OPTS.offline_usernames.len() / 12).max(2)
             } else {
                 OPTS.io_threads
             },
             max_threads: if OPTS.io_threads == 0 {
-                (OPTS.offline_usernames.len() / 4).max(4)
+                (OPTS.offline_usernames.len() / 12).max(2)
             } else {
                 OPTS.io_threads
             },
@@ -283,12 +283,12 @@ async fn async_main() -> Result<()> {
         // Use 25% of cores for async compute, at least 1, no more than 4
         async_compute: TaskPoolThreadAssignmentPolicy {
             min_threads: if OPTS.async_compute_threads == 0 {
-                (OPTS.offline_usernames.len() / 4).max(4)
+                OPTS.offline_usernames.len().max(4)
             } else {
                 OPTS.async_compute_threads
             },
             max_threads: if OPTS.async_compute_threads == 0 {
-                (OPTS.offline_usernames.len() / 4).max(4)
+                OPTS.offline_usernames.len().max(4)
             } else {
                 OPTS.async_compute_threads
             },
@@ -298,12 +298,12 @@ async fn async_main() -> Result<()> {
         // Use all remaining cores for compute (at least 1)
         compute: TaskPoolThreadAssignmentPolicy {
             min_threads: if OPTS.compute_threads == 0 {
-                (OPTS.offline_usernames.len() / 4).max(4)
+                (OPTS.offline_usernames.len() / 12).max(2)
             } else {
                 OPTS.compute_threads
             },
             max_threads: if OPTS.compute_threads == 0 {
-                (OPTS.offline_usernames.len() / 4).max(4)
+                (OPTS.offline_usernames.len() / 12).max(2)
             } else {
                 OPTS.compute_threads
             },

@@ -18,7 +18,7 @@ num=1
 while [ $num -le $total ]; do
   list="$list -u $prefix$num"
   c=$((c + 1))
-  if [ $c -ge 50 ]; then
+  if [ $c -ge 25 ]; then
     ($@ $list) &
     list=""
     c=0
