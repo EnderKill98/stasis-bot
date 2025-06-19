@@ -1,0 +1,5 @@
+Tested for smooth operation with pathfinding on hetzner:
+ - AARCH64 Shared 8 Cores:
+   - A instance with 25 accounts works fine (4 worker threads, 1 async compute thread per account)
+ - X64 Dedicated 8 Cores:
+   - 2 instances with 25 accounts each works fine (per instance: 4 worker threads, 1 async compute thread per account)
