@@ -5,4 +5,4 @@ Tested for smooth operation with pathfinding on hetzner:
    - 2 instances with 25 accounts each works fine (per instance: 4 worker threads, 1 async compute thread per account)
 
 Actually worker threads seem to depend on how many players are around:
-  - The rough math seems to be 1 worker thread per 6 estimated players around sending packets
+  - The rough math seems to be 1 worker thread per 6 estimated players around sending packets (double this for arm cores)
