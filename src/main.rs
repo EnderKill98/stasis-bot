@@ -7,16 +7,17 @@ extern crate tracing;
 
 use anyhow::{Context, Result};
 use azalea::app::PluginGroup;
+use azalea::auth::game_profile::GameProfile;
+use azalea::entity::metadata::{AbstractLivingUsingItem, Health};
 use azalea::entity::LookDirection;
 use azalea::inventory::components::Food;
-use azalea::inventory::Inventory;
+use azalea::inventory::{Inventory, ItemStackData};
 use azalea::packet::game::SendPacketEvent;
 use azalea::protocol::packets::game::s_interact::InteractionHand;
-use azalea::protocol::packets::game::s_player_action::Action;
 use azalea::protocol::packets::game::s_use_item_on::BlockHit;
 use azalea::protocol::packets::game::{
-    ClientboundGamePacket, ServerboundGamePacket, ServerboundPlayerAction,
-    ServerboundSetCarriedItem, ServerboundSwing, ServerboundUseItem, ServerboundUseItemOn,
+    ClientboundGamePacket, ServerboundGamePacket, ServerboundSetCarriedItem, ServerboundSwing,
+    ServerboundUseItem, ServerboundUseItemOn,
 };
 use azalea::registry::EntityKind;
 use azalea::swarm::DefaultSwarmPlugins;
@@ -33,7 +34,7 @@ use azalea::{
     registry::Item,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    DefaultBotPlugins, DefaultPlugins, GameProfileComponent, JoinOpts, Vec3,
+    DefaultBotPlugins, DefaultPlugins, GameProfileComponent, Hunger, JoinOpts, Vec3,
 };
 use bevy_log::LogPlugin;
 use clap::Parser;
@@ -452,14 +453,36 @@ async fn auth() -> Result<AuthResult> {
     .await?)
 }
 
-#[derive(Default, Clone, Component)]
+#[derive(Debug, Copy, Clone)]
+enum EatingProgress {
+    NotEating,
+    StartedEating,
+    IsEating,
+}
+
+#[derive(Clone, Component)]
 pub struct BotState {
     remembered_trapdoor_positions: Arc<Mutex<HashMap<String, BlockPos>>>,
     pathfinding_requested_by: Arc<Mutex<Option<String>>>,
     return_to_after_pulled: Arc<Mutex<Option<azalea::Vec3>>>,
     last_dm_handled_at: Arc<Mutex<Option<Instant>>>,
-    eating_until_nutrition_over: Arc<Mutex<Option<u32>>>,
+    eating_progress: Arc<Mutex<(Instant /* Last updated at*/, EatingProgress)>>,
     ticks_since_last_swing: Arc<AtomicU32>,
+    visual_range_cache: Arc<Mutex<HashMap<MinecraftEntityId, GameProfile>>>,
+}
+
+impl Default for BotState {
+    fn default() -> Self {
+        Self {
+            remembered_trapdoor_positions: Default::default(),
+            pathfinding_requested_by: Default::default(),
+            return_to_after_pulled: Default::default(),
+            last_dm_handled_at: Default::default(),
+            eating_progress: Arc::new(Mutex::new((Instant::now(), EatingProgress::NotEating))),
+            ticks_since_last_swing: Default::default(),
+            visual_range_cache: Default::default(),
+        }
+    }
 }
 
 impl BotState {
@@ -499,6 +522,134 @@ impl BotState {
             .context("Save remembered_trapdoor_positions as file")?;
         Ok(())
     }
+
+    pub fn find_food_in_hotbar(&self, bot: &mut Client) -> Option<(u8, ItemStackData)> {
+        let mut eat_item = None;
+
+        // Find first food item in hotbar
+        let inv = bot.entity_component::<Inventory>(bot.entity);
+        let inv_menu = inv.inventory_menu;
+        for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
+            if let Some(item_stack_data) = inv_menu.slot(slot).and_then(|stack| stack.as_present())
+            {
+                if item_stack_data.components.get::<Food>().is_some()
+                    || FOOD_ITEMS.contains(&item_stack_data.kind)
+                {
+                    eat_item = Some((hotbar_slot as u8, item_stack_data.to_owned()));
+                    break;
+                }
+            }
+        }
+
+        eat_item
+    }
+
+    pub fn is_interacting(&self, bot: &mut Client) -> bool {
+        bot.component::<AbstractLivingUsingItem>().0 // (part of AbstractLivingMetadataBundle)
+    }
+
+    /*
+    fn next_sequence(&self, bot: &mut Client) -> u32 {
+        /*let sequence = bot.entity_component::<&mut CurrentSequenceNumber>(bot.entity);
+         **sequence += 1;
+         *sequence as u32*/
+        let mut ecs = bot.ecs.lock();
+        let mut state = ecs.query::<&QueryData<(&mut CurrentSequenceNumber)>>();
+        let query_result = state.get(&ecs, bot.entity);
+        match query_result {
+            Ok(query_result) => {
+                let seq = **query_result;
+            }
+            Err(err) => {
+                error!("Expected bot to have component CurrentSequenceNumber: {err:?}");
+            }
+        }
+        //let seq = *current_sequence;
+
+        todo!()
+    }*/
+
+    pub fn attempt_eat(&self, bot: &mut Client) -> bool {
+        if let Some((eat_hotbar_slot, eat_item_stack_data)) = self.find_food_in_hotbar(bot) {
+            // Switch to slot and start eating
+            let look_direction = bot.component::<LookDirection>();
+            let mut ecs = bot.ecs.lock();
+            let entity = bot.entity;
+
+            ecs.send_event(SetSelectedHotbarSlotEvent {
+                entity,
+                slot: eat_hotbar_slot,
+            });
+            ecs.send_event(SendPacketEvent {
+                sent_by: entity,
+                packet: ServerboundGamePacket::SetCarriedItem(ServerboundSetCarriedItem {
+                    slot: eat_hotbar_slot as u16,
+                }),
+            });
+
+            ecs.send_event(SendPacketEvent {
+                sent_by: entity,
+                packet: ServerboundGamePacket::UseItem(ServerboundUseItem {
+                    hand: InteractionHand::MainHand,
+                    sequence: 0,
+                    yaw: look_direction.y_rot,
+                    pitch: look_direction.x_rot,
+                }),
+            });
+
+            info!(
+                "Starting to eat item in hotbar slot {slot} ({count}x {kind})...",
+                kind = eat_item_stack_data.kind,
+                count = eat_item_stack_data.count,
+                slot = eat_hotbar_slot,
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn eat_tick(&self, bot: &mut Client) {
+        let mut eating_progress = self.eating_progress.lock();
+
+        match eating_progress.1.clone() {
+            EatingProgress::NotEating => {
+                let health = bot.component::<Health>();
+                let hunger = bot.component::<Hunger>();
+
+                let should_eat = (hunger.food <= 20 - (3 * 2)
+                    || (health.0 < 20f32 && hunger.food < 20))
+                    && hunger.saturation <= 0.0;
+
+                if OPTS.auto_eat
+                    && should_eat
+                    && eating_progress.0.elapsed() > Duration::from_millis(500)
+                {
+                    if self.attempt_eat(bot) {
+                        *eating_progress = (Instant::now(), EatingProgress::StartedEating);
+                    }
+                }
+            }
+            EatingProgress::StartedEating => {
+                if eating_progress.0.elapsed() > Duration::from_secs(3) {
+                    warn!("Attempted to eat, but it failed (no interacting detected more than 3s later)!");
+                    *eating_progress = (Instant::now(), EatingProgress::NotEating);
+                } else if self.is_interacting(bot) {
+                    *eating_progress = (Instant::now(), EatingProgress::IsEating);
+                    info!("Eating in progress...");
+                }
+            }
+            EatingProgress::IsEating => {
+                if eating_progress.0.elapsed() > Duration::from_secs(15) {
+                    warn!("Eating took too long! Perhaps interaction got confused with another action, the server is seriously lagging or eating a modified food item that takes forever (in which case ignore this)!");
+                    *eating_progress = (Instant::now(), EatingProgress::NotEating);
+                } else if !self.is_interacting(bot) {
+                    *eating_progress = (Instant::now(), EatingProgress::NotEating);
+                    info!("Successfully finished eating!");
+                }
+            }
+        }
+    }
 }
 
 async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyhow::Result<()> {
@@ -524,16 +675,19 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             // Surely no way to cheese it..
             let mut dm = None;
             if message.starts_with('[') && message.contains("-> me] ") {
+                // Common format used by Essentials and other custom plugins: [Someone -> me] Message
                 dm = Some((
                     message.split(" ").next().unwrap()[1..].to_owned(),
                     message.split("-> me] ").collect::<Vec<_>>()[1].to_owned(),
                 ));
             } else if message.contains(" whispers to you: ") {
+                // Vanilla minecraft: Someone whispers to you: Message
                 dm = Some((
                     message.split(" ").next().unwrap().to_owned(),
                     message.split("whispers to you: ").collect::<Vec<_>>()[1].to_owned(),
                 ));
             } else if message.contains(" whispers: ") {
+                // Used on 2b2t: Someone whispers: Message
                 let sender = message.split(" ").next().unwrap().to_owned();
                 let mut message = message.split(" whispers: ").collect::<Vec<_>>()[1].to_owned();
                 if message.ends_with(&sender) {
@@ -558,12 +712,17 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     .unwrap_or(true)
                 {
                     info!("Executing command {command:?} sent by {sender:?} with args {args:?}");
-                    if commands::execute(&mut bot, &bot_state, sender, command, args)
-                        .context("Executing command")?
-                    {
-                        *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                    } else {
-                        warn!("Command was not executed. Most likely an unknown command.");
+                    match commands::execute(&mut bot, &bot_state, sender.clone(), command, args) {
+                        Ok(executed) => {
+                            if executed {
+                                *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                            } else {
+                                warn!("Command was not executed. Most likely an unknown command.");
+                            }
+                        }
+                        Err(err) => {
+                            commands::send_command(&mut bot, &format!("msg {sender} Oops: {err}"));
+                        }
                     }
                 } else {
                     warn!("Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked.");
@@ -645,8 +804,8 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                 let bot_state = bot_state.clone();
                                 tokio::spawn(async move {
                                     match bot_state
-                                    .save_stasis()
-                                    .await {
+                                        .save_stasis()
+                                        .await {
                                         Ok(_) => info!("Saved remembered trapdoor positions to file."),
                                         Err(err) => error!("Failed to save remembered trapdoor positions to file: {err:?}"),
                                     }
@@ -654,12 +813,38 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             }
                         }
                     }
+                } else if packet.entity_type == EntityKind::Player {
+                    match bot.tab_list().get(&packet.uuid) {
+                        Some(player_info) => {
+                            info!(
+                                "{} ({}) entered visual range!",
+                                player_info.profile.name, player_info.uuid
+                            );
+                            bot_state
+                                .visual_range_cache
+                                .lock()
+                                .insert(packet.id, player_info.profile.clone());
+                        }
+                        None => {
+                            warn!(
+                                "An unknown player (id: {}, uuid: {}) entered visual range!",
+                                packet.id, packet.uuid
+                            );
+                        }
+                    }
                 }
-                if packet.entity_type == EntityKind::Player {
-                    /*info!(
-                        "A player appeared at {} with entity id {}",
-                        packet.position, packet.id
-                    );*/
+            }
+            ClientboundGamePacket::RemoveEntities(packet) => {
+                for entity_id in &packet.entity_ids {
+                    // At this point the entity was already removed from the ecs world!
+                    if let Some(profile) = bot_state.visual_range_cache.lock().remove(entity_id) {
+                        info!("{} ({}) left visual range!", profile.name, profile.uuid)
+                    } else {
+                        warn!(
+                            "A player with no known GameProfile (id: {}) left visual range!",
+                            entity_id.0
+                        )
+                    }
                 }
             }
             ClientboundGamePacket::EntityEvent(packet) => {
@@ -686,97 +871,12 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
                     }
                 }
-
-                // TODO: Use Attribute::GenericMaxHealth instead of hardcoded 20
-                let eat_until_nutrition_over = bot_state
-                    .eating_until_nutrition_over
-                    .as_ref()
-                    .lock()
-                    .clone();
-                if let Some(eat_until_nutrition_over) = eat_until_nutrition_over {
-                    // Is eating
-                    if packet.food > eat_until_nutrition_over {
-                        // Food increased, stop eating
-                        bot.ecs.lock().send_event(SendPacketEvent {
-                            sent_by: bot.entity,
-                            packet: ServerboundGamePacket::PlayerAction(ServerboundPlayerAction {
-                                action: Action::ReleaseUseItem,
-                                pos: Default::default(),
-                                direction: Direction::Down,
-                                sequence: 0,
-                            }),
-                        });
-                        *bot_state.eating_until_nutrition_over.lock() = None;
-                        info!("Finished eating.");
-                    }
-                }
-
-                if OPTS.auto_eat
-                    && eat_until_nutrition_over.is_none()
-                    && (packet.food <= 20 - (3 * 2) || (packet.health < 20f32 && packet.food < 20))
-                {
-                    let mut eat_item = None;
-
-                    // Find first food item in hotbar
-                    let inv = bot.entity_component::<Inventory>(bot.entity);
-                    let inv_menu = inv.inventory_menu;
-                    for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
-                        if let Some(item_stack_data) =
-                            inv_menu.slot(slot).and_then(|stack| stack.as_present())
-                        {
-                            if item_stack_data.components.get::<Food>().is_some()
-                                || FOOD_ITEMS.contains(&item_stack_data.kind)
-                            {
-                                eat_item = Some((
-                                    hotbar_slot as u8,
-                                    format!(
-                                        "{} ({}x)",
-                                        item_stack_data.kind, item_stack_data.count
-                                    ),
-                                ));
-                                break;
-                            }
-                        }
-                    }
-
-                    if let Some((eat_hotbar_slot, eat_item_name)) = eat_item {
-                        // Switch to slot and start eating
-                        let look_direction = bot.component::<LookDirection>();
-                        let entity = bot.entity;
-                        let mut ecs = bot.ecs.lock();
-                        ecs.send_event(SetSelectedHotbarSlotEvent {
-                            entity,
-                            slot: eat_hotbar_slot,
-                        });
-
-                        // In case that the slot differed, the packet was not sent, yet.
-                        ecs.send_event_batch([
-                            SendPacketEvent {
-                                sent_by: entity,
-                                packet: ServerboundGamePacket::SetCarriedItem(
-                                    ServerboundSetCarriedItem {
-                                        slot: eat_hotbar_slot as u16,
-                                    },
-                                ),
-                            },
-                            SendPacketEvent {
-                                sent_by: entity,
-                                packet: ServerboundGamePacket::UseItem(ServerboundUseItem {
-                                    hand: InteractionHand::MainHand,
-                                    sequence: 0,
-                                    yaw: look_direction.y_rot,
-                                    pitch: look_direction.x_rot,
-                                }),
-                            },
-                        ]);
-                        *bot_state.eating_until_nutrition_over.lock() = Some(packet.food);
-                        info!("Eating {eat_item_name} in hotbar slot {eat_hotbar_slot}...");
-                    }
-                }
             }
             _ => {}
         },
         Event::Tick => {
+            bot_state.eat_tick(&mut bot);
+
             // 2b2t Anti AFK
             if OPTS.periodic_swing {
                 let mut ticks = bot_state.ticks_since_last_swing.load(Ordering::Relaxed);
