@@ -755,7 +755,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                     let y_offset = y_offset_abs * y_offset_mult;
                                     let azalea_block_pos = azalea::BlockPos::new(
                                         packet.position.x.floor() as i32,
-                                        (packet.position.y.floor() - 1.0) as i32 + y_offset,
+                                        (packet.position.y.floor() + 1.0) as i32 + y_offset,
                                         packet.position.z.floor() as i32,
                                     );
                                     if let Some(state) = world.get_block_state(&azalea_block_pos) {
