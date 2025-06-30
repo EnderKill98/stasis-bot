@@ -1,39 +1,46 @@
 #![feature(let_chains)]
 
 pub mod commands;
-pub mod plugins;
 
 #[macro_use]
 extern crate tracing;
 
 use anyhow::{Context, Result};
+use azalea::app::PluginGroup;
+use azalea::entity::LookDirection;
+use azalea::inventory::components::Food;
+use azalea::inventory::Inventory;
+use azalea::packet::game::SendPacketEvent;
+use azalea::protocol::packets::game::s_interact::InteractionHand;
+use azalea::protocol::packets::game::s_player_action::Action;
+use azalea::protocol::packets::game::s_use_item_on::BlockHit;
+use azalea::protocol::packets::game::{
+    ClientboundGamePacket, ServerboundGamePacket, ServerboundPlayerAction,
+    ServerboundSetCarriedItem, ServerboundSwing, ServerboundUseItem, ServerboundUseItemOn,
+};
+use azalea::registry::EntityKind;
+use azalea::swarm::DefaultSwarmPlugins;
+use azalea::task_pool::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use azalea::{
     auth::AuthResult,
     blocks::Block,
     core::direction::Direction,
     ecs::query::With,
     entity::{metadata::Player, EyeHeight, Pose, Position},
-    inventory::{InventoryComponent, ItemSlot, SetSelectedHotbarSlotEvent},
-    packet_handling::game::SendPacketEvent,
+    inventory::SetSelectedHotbarSlotEvent,
     pathfinder::{goals::BlockPosGoal, Pathfinder},
     prelude::*,
-    protocol::packets::game::{
-        serverbound_interact_packet::InteractionHand,
-        serverbound_player_action_packet::ServerboundPlayerActionPacket,
-        serverbound_set_carried_item_packet::ServerboundSetCarriedItemPacket,
-        serverbound_use_item_on_packet::{BlockHit, ServerboundUseItemOnPacket},
-        serverbound_use_item_packet::ServerboundUseItemPacket,
-        ClientboundGamePacket, ServerboundGamePacket,
-    },
-    registry::{EntityKind, Item},
+    registry::Item,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    GameProfileComponent, JoinOpts, Vec3,
+    DefaultBotPlugins, DefaultPlugins, GameProfileComponent, JoinOpts, Vec3,
 };
+use bevy_log::LogPlugin;
 use clap::Parser;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Debug,
@@ -42,8 +49,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use std::sync::atomic::{AtomicU32, Ordering};
-use azalea::protocol::packets::game::serverbound_swing_packet::ServerboundSwingPacket;
 use tracing_subscriber::prelude::*;
 
 #[allow(dead_code)]
@@ -65,11 +70,6 @@ struct Opts {
     /// Player names who are considered more trustworthy for certain commands
     #[clap(short, long)]
     admin: Vec<String>,
-
-    /// Use ViaProxy to translate the protocol to the given minecraft version.
-    /// Conflicts with --openauthmod
-    #[clap(short, long)]
-    via: Option<String>,
 
     /// Automatically log out, once getting to this HP or lower (or a totem pops)
     #[clap(short = 'H', long)]
@@ -99,11 +99,6 @@ struct Opts {
     #[clap(long)]
     offline_username: Option<String>,
 
-    /// Use OpenAuthMod. Enables using this account across proxies like ViaProxy.
-    /// Conflicts with --via
-    #[clap(short = 'A', long)]
-    openauthmod: bool,
-
     /// Forbid pathfinding to mine blocks to reach its goal
     #[clap(short = 'M', long)]
     no_mining: bool,
@@ -131,6 +126,22 @@ struct Opts {
     /// 2b Anti AFK
     #[clap(long)]
     periodic_swing: bool,
+
+    /// How many tokio worker threads to use. 0 = Automatic
+    #[clap(short = 't', long, default_value = "0")]
+    worker_threads: usize,
+
+    /// How many async compute tasks to create (might be pathfinding). 0 = Automatic
+    #[clap(short = 'c', long, default_value = "0")]
+    compute_threads: usize,
+
+    /// How many tasks to create for Bevys AsyncComputeTaskPool (might be pathfinding). 0 = Automatic
+    #[clap(short = 'A', long, default_value = "0")]
+    async_compute_threads: usize,
+
+    /// How many tasks to create for IO. 0 = Automatic
+    #[clap(short = 'i', long, default_value = "0")]
+    io_threads: usize,
 }
 
 pub const FOOD_ITEMS: &[Item] = &[
@@ -199,21 +210,23 @@ impl From<BlockPos> for azalea::BlockPos {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     // Parse cli args, handle --help, etc.
     let _ = *OPTS;
 
     // Setup logging
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info");
+        unsafe {
+            std::env::set_var("RUST_LOG", "info,azalea::pathfinder=warn");
+        }
     }
+
     let reg = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .with(
             tracing_subscriber::fmt::layer()
-                .compact()
-                .with_ansi(!OPTS.no_color),
+                .with_ansi(!OPTS.no_color)
+                .with_thread_names(true),
         );
     if let Some(logfile_path) = &OPTS.log_file {
         let file = std::fs::OpenOptions::new()
@@ -231,11 +244,30 @@ async fn main() -> Result<()> {
         reg.init();
     }
 
-    if OPTS.openauthmod && OPTS.via.is_some() {
-        error!("-v/--via and -A/--openauthmod cannot be used together! Choose only one.");
-        std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
-    }
+    let worker_threads = if OPTS.worker_threads == 0 {
+        4
+    } else {
+        OPTS.worker_threads
+    };
+    info!("Worker threads: {worker_threads}");
 
+    let worker_thread_num = AtomicU32::new(1);
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .thread_name_fn(move || {
+            format!(
+                "Tokio Worker {:pad$}",
+                worker_thread_num.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                pad = worker_threads.to_string().len(),
+            )
+        })
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     if !OPTS.just_print_access_token {
         if OPTS.offline_username.is_none() {
             info!(
@@ -304,7 +336,7 @@ async fn main() -> Result<()> {
         if let Some(access_token) = account.access_token {
             println!("{}", access_token.lock());
             std::process::exit(0);
-        }else {
+        } else {
             error!("Failed to find access token!");
             std::process::exit(EXITCODE_NO_ACCESS_TOKEN);
         }
@@ -337,24 +369,76 @@ async fn main() -> Result<()> {
         });
     }
 
-    let mut builder = azalea::swarm::SwarmBuilder::new()
+    let account_count = 1;
+    let task_opts = TaskPoolOptions {
+        // By default, use however many cores are available on the system
+        min_total_threads: 1,
+        max_total_threads: usize::MAX,
+
+        // Use 25% of cores for IO, at least 1, no more than 4
+        io: TaskPoolThreadAssignmentPolicy {
+            min_threads: if OPTS.io_threads == 0 {
+                (account_count / 12).max(2)
+            } else {
+                OPTS.io_threads
+            },
+            max_threads: if OPTS.io_threads == 0 {
+                (account_count / 12).max(2)
+            } else {
+                OPTS.io_threads
+            },
+            percent: 0.25,
+        },
+
+        // Use 25% of cores for async compute, at least 1, no more than 4
+        async_compute: TaskPoolThreadAssignmentPolicy {
+            min_threads: if OPTS.async_compute_threads == 0 {
+                account_count.max(4)
+            } else {
+                OPTS.async_compute_threads
+            },
+            max_threads: if OPTS.async_compute_threads == 0 {
+                account_count.max(4)
+            } else {
+                OPTS.async_compute_threads
+            },
+            percent: 0.25,
+        },
+
+        // Use all remaining cores for compute (at least 1)
+        compute: TaskPoolThreadAssignmentPolicy {
+            min_threads: if OPTS.compute_threads == 0 {
+                (account_count / 12).max(2)
+            } else {
+                OPTS.compute_threads
+            },
+            max_threads: if OPTS.compute_threads == 0 {
+                (account_count / 12).max(2)
+            } else {
+                OPTS.compute_threads
+            },
+            percent: 1.0, // This 1.0 here means "whatever is left over"
+        },
+    };
+    let builder = azalea::swarm::SwarmBuilder::new_without_plugins()
+        .add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<TaskPoolPlugin>()
+                .disable::<LogPlugin>(),
+        )
+        .add_plugins(DefaultBotPlugins)
+        .add_plugins(DefaultSwarmPlugins)
+        .add_plugins(TaskPoolPlugin {
+            task_pool_options: task_opts,
+        })
         .set_handler(handle)
         .set_swarm_handler(swarm_handle)
         .add_account(account.clone());
-    if let Some(via) = &OPTS.via {
-        info!("Using ViaProxy to translate the protocol to minecraft version {via}...");
-        builder = builder.add_plugins(azalea_viaversion::ViaVersionPlugin::start(via).await);
-    }
-    if OPTS.openauthmod {
-        info!("Using OpenAuthMod authentication protocol. If you connect over a proxy, it can see this traffic!");
-        builder = builder.add_plugins(plugins::openauthmod::OpenAuthModPlugin::default());
-    }
-    // if OPTS.no_fall:
-    // builder = builder.add_plugins(plugins::nofall::NoFallPlugin::default());
     builder
         .start(OPTS.server_address.as_str())
         .await
-        .context("Running bot")?
+        .context("Running swarm")?
 }
 
 async fn auth() -> Result<AuthResult> {
@@ -489,11 +573,11 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
         Event::Packet(packet) => match packet.as_ref() {
             ClientboundGamePacket::AddEntity(packet) => {
                 if !OPTS.no_stasis && packet.entity_type == EntityKind::EnderPearl {
-                    let owning_player_entity_id = packet.data;
+                    let owning_player_entity_id = packet.data as i32;
                     let mut bot = bot.clone();
                     let entity = bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(
                         |(entity_id,): &(&MinecraftEntityId,)| {
-                            entity_id.0 as i32 == owning_player_entity_id
+                            entity_id.0 == owning_player_entity_id
                         },
                     );
                     if let Some(entity) = entity {
@@ -580,7 +664,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             }
             ClientboundGamePacket::EntityEvent(packet) => {
                 let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
-                if packet.entity_id == my_entity_id && packet.event_id == 35 {
+                if packet.entity_id.0 == my_entity_id && packet.event_id == 35 {
                     // Totem popped!
                     info!("I popped a Totem!");
                     if OPTS.autolog_hp.is_some() {
@@ -614,13 +698,13 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     if packet.food > eat_until_nutrition_over {
                         // Food increased, stop eating
                         bot.ecs.lock().send_event(SendPacketEvent {
-                            entity: bot.entity,
-                            packet: ServerboundGamePacket::PlayerAction(ServerboundPlayerActionPacket {
-                                action: azalea::protocol::packets::game::serverbound_player_action_packet::Action::ReleaseUseItem,
+                            sent_by: bot.entity,
+                            packet: ServerboundGamePacket::PlayerAction(ServerboundPlayerAction {
+                                action: Action::ReleaseUseItem,
                                 pos: Default::default(),
                                 direction: Direction::Down,
                                 sequence: 0,
-                            })
+                            }),
                         });
                         *bot_state.eating_until_nutrition_over.lock() = None;
                         info!("Finished eating.");
@@ -634,20 +718,21 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     let mut eat_item = None;
 
                     // Find first food item in hotbar
-                    let inv = bot.entity_component::<InventoryComponent>(bot.entity);
+                    let inv = bot.entity_component::<Inventory>(bot.entity);
                     let inv_menu = inv.inventory_menu;
                     for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
-                        let item = inv_menu.slot(slot);
-                        if let Some(ItemSlot::Present(item_slot)) = item {
-                            if item_slot
-                                .components
-                                .get(azalea::registry::DataComponentKind::Food)
-                                .is_some()
-                                || FOOD_ITEMS.contains(&item_slot.kind)
+                        if let Some(item_stack_data) =
+                            inv_menu.slot(slot).and_then(|stack| stack.as_present())
+                        {
+                            if item_stack_data.components.get::<Food>().is_some()
+                                || FOOD_ITEMS.contains(&item_stack_data.kind)
                             {
                                 eat_item = Some((
                                     hotbar_slot as u8,
-                                    format!("{} ({}x)", item_slot.kind, item_slot.count),
+                                    format!(
+                                        "{} ({}x)",
+                                        item_stack_data.kind, item_stack_data.count
+                                    ),
                                 ));
                                 break;
                             }
@@ -662,21 +747,24 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             entity,
                             slot: eat_hotbar_slot,
                         });
+                        let look_direction = bot.component::<LookDirection>();
                         // In case that the slot differed, the packet was not sent, yet.
                         ecs.send_event_batch([
                             SendPacketEvent {
-                                entity,
+                                sent_by: entity,
                                 packet: ServerboundGamePacket::SetCarriedItem(
-                                    ServerboundSetCarriedItemPacket {
+                                    ServerboundSetCarriedItem {
                                         slot: eat_hotbar_slot as u16,
                                     },
                                 ),
                             },
                             SendPacketEvent {
-                                entity,
-                                packet: ServerboundGamePacket::UseItem(ServerboundUseItemPacket {
+                                sent_by: entity,
+                                packet: ServerboundGamePacket::UseItem(ServerboundUseItem {
                                     hand: InteractionHand::MainHand,
                                     sequence: 0,
+                                    yaw: look_direction.y_rot,
+                                    pitch: look_direction.x_rot,
                                 }),
                             },
                         ]);
@@ -692,16 +780,18 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
             if OPTS.periodic_swing {
                 let mut ticks = bot_state.ticks_since_last_swing.load(Ordering::Relaxed);
                 ticks += 1;
-                if ticks > 20*30 {
+                if ticks > 20 * 30 {
                     ticks = 0;
                     bot.ecs.lock().send_event(SendPacketEvent {
-                        entity: bot.entity,
-                        packet: ServerboundGamePacket::Swing(ServerboundSwingPacket {
+                        sent_by: bot.entity,
+                        packet: ServerboundGamePacket::Swing(ServerboundSwing {
                             hand: InteractionHand::MainHand,
                         }),
                     });
                 }
-                bot_state.ticks_since_last_swing.store(ticks, Ordering::Relaxed);
+                bot_state
+                    .ticks_since_last_swing
+                    .store(ticks, Ordering::Relaxed);
             }
 
             // Execute commands from input queue
@@ -753,7 +843,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             _ => **eye_height as f64,
                         };
                         let eye_pos = **pos + Vec3::new(0f64, y_offset, 0f64);
-                        let dist_sqrt = my_eye_pos.distance_to_sqr(pos);
+                        let dist_sqrt = my_eye_pos.distance_squared_to(pos);
                         if (closest_eye_pos.is_none() || dist_sqrt < closest_dist_sqrt)
                             && dist_sqrt <= (max_dist * max_dist) as f64
                         {
@@ -790,17 +880,18 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                             ));
                         }
                         bot.ecs.lock().send_event(SendPacketEvent {
-                            entity: bot.entity,
-                            packet: ServerboundGamePacket::UseItemOn(ServerboundUseItemOnPacket {
+                            sent_by: bot.entity,
+                            packet: ServerboundGamePacket::UseItemOn(ServerboundUseItemOn {
                                 block_hit: BlockHit {
                                     block_pos: azalea::BlockPos::from(trapdoor_pos),
                                     direction: Direction::Down,
-                                    location: azalea::Vec3 {
+                                    location: Vec3 {
                                         x: trapdoor_pos.x as f64 + 0.5,
                                         y: trapdoor_pos.y as f64 + 0.5,
                                         z: trapdoor_pos.z as f64 + 0.5,
                                     },
                                     inside: true,
+                                    world_border: false,
                                 },
                                 hand: InteractionHand::MainHand,
                                 sequence: 0,
@@ -856,7 +947,7 @@ impl Default for SwarmState {
     }
 }
 
-async fn swarm_rejoin(mut swarm: Swarm, state: SwarmState, account: Account, join_opts: JoinOpts) {
+async fn swarm_rejoin(swarm: Swarm, state: SwarmState, account: Account, join_opts: JoinOpts) {
     let mut reconnect_after_secs = 5;
     loop {
         let last_refreshed = state.last_account_refresh.lock().elapsed();
