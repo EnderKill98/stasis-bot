@@ -741,13 +741,14 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
 
                     if let Some((eat_hotbar_slot, eat_item_name)) = eat_item {
                         // Switch to slot and start eating
+                        let look_direction = bot.component::<LookDirection>();
                         let entity = bot.entity;
                         let mut ecs = bot.ecs.lock();
                         ecs.send_event(SetSelectedHotbarSlotEvent {
                             entity,
                             slot: eat_hotbar_slot,
                         });
-                        let look_direction = bot.component::<LookDirection>();
+
                         // In case that the slot differed, the packet was not sent, yet.
                         ecs.send_event_batch([
                             SendPacketEvent {
