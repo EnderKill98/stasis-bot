@@ -32,6 +32,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use tokio::time::MissedTickBehavior;
 use tracing::{Instrument, Level};
 use tracing_subscriber::prelude::*;
 
@@ -43,7 +44,6 @@ pub const EXITCODE_OTHER: i32 = 1; // Due to errors returned and propagated to m
 pub const EXITCODE_CONFLICTING_CLI_OPTS: i32 = 2;
 pub const EXITCODE_AUTH_FAILED: i32 = 3;
 pub const EXITCODE_NO_ACCESS_TOKEN: i32 = 4;
-
 pub const EXITCODE_USER_REQUESTED_STOP: i32 = 20; // Using an error code to prevent automatic relaunching in some configurations or scripts
 
 /// A simple stasis bot, using azalea!
@@ -100,6 +100,10 @@ struct Opts {
     /// How many tasks to create for IO. 0 = Automatic
     #[clap(short = 'i', long, default_value = "0")]
     io_threads: usize,
+
+    /// Delay between joins in milliseconds (0 = off)
+    #[clap(short = 'd', long, default_value = "0")]
+    join_delay: usize,
 }
 
 pub const FOOD_ITEMS: &[Item] = &[
@@ -140,6 +144,7 @@ pub const FOOD_ITEMS: &[Item] = &[
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
 static INPUTLINE_QUEUES: Mutex<Vec<Arc<Mutex<VecDeque<String>>>>> = Mutex::new(Vec::new());
+static SWARM: Mutex<Option<Swarm>> = Mutex::new(None);
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 struct BlockPos {
@@ -310,7 +315,7 @@ async fn async_main() -> Result<()> {
             percent: 1.0, // This 1.0 here means "whatever is left over"
         },
     };
-    let builder = azalea::swarm::SwarmBuilder::new_without_plugins()
+    let mut builder = azalea::swarm::SwarmBuilder::new_without_plugins()
         .add_plugins(
             DefaultPlugins
                 .build()
@@ -323,14 +328,65 @@ async fn async_main() -> Result<()> {
             task_pool_options: task_opts,
         })
         .set_handler(handle_outer)
-        .set_swarm_handler(swarm_handle)
-        .add_accounts(accounts);
+        .set_swarm_handler(swarm_handle);
+
+    if OPTS.join_delay == 0 {
+        // Join all at once
+        builder = builder.add_accounts(accounts);
+    } else {
+        tokio::spawn(async move {
+            if let Err(err) = swarmer(accounts).await {
+                error!("Swarmer error: {err}");
+            } else {
+                info!("Swarmer exited.");
+            }
+        });
+    }
+
     // if OPTS.no_fall:
     // builder = builder.add_plugins(plugins::nofall::NoFallPlugin::default());
     builder
         .start(OPTS.server_address.as_str())
         .await
         .context("Running bot")?
+}
+
+async fn swarmer(accounts: Vec<Account>) -> Result<()> {
+    info!("Spawned swarmer. Waiting for swarm...");
+    let mut swarm = None;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Some(some_swarm) = SWARM.lock().as_ref() {
+            swarm = Some(some_swarm.clone());
+        }
+    }
+
+    if swarm.is_none() {
+        error!("No swarm found! Exiting!");
+        std::process::exit(1);
+    }
+    let mut swarm = swarm.unwrap();
+
+    info!("Swarm found! Joining bots with delay...");
+
+    let mut interval = tokio::time::interval(Duration::from_millis(OPTS.join_delay as u64));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Burst);
+
+    let mut account_index = 0;
+    loop {
+        interval.tick().await;
+        let account = accounts.get(account_index);
+        if let Some(account) = account {
+            info!("Joining {} ...", account.username);
+            swarm.add(account, BotState::default()).await?;
+            account_index += 1;
+        } else {
+            break;
+        }
+    }
+
+    info!("All accounts joined!");
+    Ok(())
 }
 
 #[derive(Clone, Component)]
@@ -439,6 +495,16 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         .next()
                         .unwrap()
                         .to_owned();
+                }
+                if message.starts_with('!') {
+                    dm = Some((sender, message));
+                }
+            } else if message.contains(": ") {
+                let mut sender = message.split(": ").next().unwrap().to_owned();
+                let mut message = message.split(": ").collect::<Vec<_>>()[1].to_owned();
+                if sender.contains(" ") {
+                    let words = sender.split(" ").collect::<Vec<_>>();
+                    sender = words[words.len() - 1].to_owned();
                 }
                 if message.starts_with('!') {
                     dm = Some((sender, message));
@@ -665,6 +731,10 @@ async fn swarm_rejoin(swarm: Swarm, state: SwarmState, account: Account, join_op
 
 async fn swarm_handle(swarm: Swarm, event: SwarmEvent, state: SwarmState) -> anyhow::Result<()> {
     match event {
+        SwarmEvent::Init => {
+            info!("Swarm initialized!");
+            *SWARM.lock() = Some(swarm.clone());
+        }
         SwarmEvent::Disconnect(account, join_opts) => {
             tokio::spawn(
                 swarm_rejoin(
