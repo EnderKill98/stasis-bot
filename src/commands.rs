@@ -1,4 +1,4 @@
-use crate::{BotState, EatingProgress, OPTS};
+use crate::{BotState, DEVNET_TX, EatingProgress, OPTS, devnet};
 use azalea::core::direction::Direction;
 use azalea::inventory::operations::ClickType;
 use azalea::inventory::{Inventory, ItemStack, SetSelectedHotbarSlotEvent};
@@ -10,15 +10,16 @@ use azalea::protocol::packets::game::{
 };
 use azalea::registry::Item;
 use azalea::{
+    BlockPos, GameProfileComponent, Vec3,
     ecs::query::With,
-    entity::{metadata::Player, Position},
+    entity::{Position, metadata::Player},
     pathfinder::goals::{BlockPosGoal, ReachBlockPosGoal},
     prelude::*,
     world::InstanceName,
-    BlockPos, GameProfileComponent, Vec3,
 };
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
+use uuid::Uuid;
 
 pub fn execute(
     bot: &mut Client,
@@ -69,7 +70,13 @@ pub fn execute(
             Ok(true)
         }
         "about" => {
-            send_command(bot, &format!("msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot {}: github.com/EnderKill98/stasis-bot", env!("CARGO_PKG_VERSION")));
+            send_command(
+                bot,
+                &format!(
+                    "msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot {}: github.com/EnderKill98/stasis-bot",
+                    env!("CARGO_PKG_VERSION")
+                ),
+            );
             Ok(true)
         }
         "tp" => {
@@ -84,7 +91,12 @@ pub fn execute(
 
             if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
                 if bot_state.pathfinding_requested_by.lock().is_some() {
-                    send_command(bot, &format!("msg {sender} Please ask again in a bit. I'm currently already going somewhere..."));
+                    send_command(
+                        bot,
+                        &format!(
+                            "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
+                        ),
+                    );
                     return Ok(true);
                 }
                 send_command(
@@ -117,7 +129,12 @@ pub fn execute(
         }
         "comehere" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -157,7 +174,12 @@ pub fn execute(
         }
         "say" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -173,7 +195,12 @@ pub fn execute(
         }
         "stop" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -182,11 +209,21 @@ pub fn execute(
         }
         "pos" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
             if !OPTS.enable_pos_command {
-                send_command(bot, &format!("msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -204,7 +241,12 @@ pub fn execute(
 
         "selecthand" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -240,7 +282,12 @@ pub fn execute(
 
         "drop" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -287,7 +334,12 @@ pub fn execute(
 
         "dropall" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -336,7 +388,12 @@ pub fn execute(
 
         "eat" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
             if bot_state.attempt_eat(bot) {
@@ -351,7 +408,12 @@ pub fn execute(
 
         "swap" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -374,7 +436,12 @@ pub fn execute(
 
         "printinv" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -410,7 +477,12 @@ pub fn execute(
 
         "equip" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -481,7 +553,12 @@ pub fn execute(
 
         "unequip" => {
             if !sender_is_admin {
-                send_command(bot, &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"));
+                send_command(
+                    bot,
+                    &format!(
+                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
+                    ),
+                );
                 return Ok(true);
             }
 
@@ -548,4 +625,153 @@ pub fn send_command(bot: &mut Client, command: &str) {
         );
         bot.send_command_packet(truncated_command);
     }
+}
+
+pub async fn handle_devnet_message(
+    bot: &mut Client,
+    bot_state: &BotState,
+    message: devnet::Message,
+) -> anyhow::Result<()> {
+    match message {
+        devnet::Message::CheckRequest {
+            for_mc_id,
+            destination,
+        } => {
+            let sender = bot
+                .tab_list()
+                .iter()
+                .find(|(uuid, _info)| uuid == &&for_mc_id)
+                .map(|(_uuid, info)| info.profile.name.to_owned());
+            if sender.is_none() {
+                send_devnet_feedback(
+                    bot.username(),
+                    for_mc_id,
+                    true,
+                    "You need to be online for me to know your username and check your pearl!",
+                )
+                .await?;
+                return Ok(());
+            }
+            let sender = sender.unwrap();
+
+            info!(
+                "Got devnet request to check pearl for {sender} ({for_mc_id}) at destination {destination}"
+            );
+
+            let has_trapdoor = bot_state
+                .remembered_trapdoor_positions
+                .lock()
+                .contains_key(&sender);
+            let devnet_tx = DEVNET_TX.lock().clone();
+            if let Some(devnet_tx) = devnet_tx {
+                devnet_tx
+                    .send(devnet::Message::CheckResponse {
+                        for_mc_id,
+                        pearls: if has_trapdoor {
+                            vec![serde_json::json!({})]
+                        } else {
+                            vec![]
+                        },
+                    })
+                    .await?;
+            }
+        }
+
+        devnet::Message::PullRequest {
+            pearl_index,
+            for_mc_id,
+            destination,
+        } => {
+            let sender = bot
+                .tab_list()
+                .iter()
+                .find(|(uuid, _info)| uuid == &&for_mc_id)
+                .map(|(_uuid, info)| info.profile.name.to_owned());
+            if sender.is_none() {
+                send_devnet_feedback(
+                    bot.username(),
+                    for_mc_id,
+                    true,
+                    "You need to be online for me to know your username and pull your pearl!",
+                )
+                .await?;
+                return Ok(());
+            }
+            let sender = sender.unwrap();
+            info!(
+                "Got devnet request to pull pearl {pearl_index} for {sender} ({for_mc_id}) at destination {destination}"
+            );
+
+            let trapdoor_pos = bot_state
+                .remembered_trapdoor_positions
+                .lock()
+                .get(&sender)
+                .cloned();
+            if let Some(trapdoor_pos) = trapdoor_pos {
+                if bot_state.pathfinding_requested_by.lock().is_some() {
+                    send_devnet_feedback(
+                        bot.username(),
+                        for_mc_id,
+                        true,
+                        "Please ask again in a bit. I'm currently already going somewhere...",
+                    )
+                    .await?;
+                    return Ok(());
+                }
+
+                send_devnet_feedback(
+                    bot.username(),
+                    for_mc_id,
+                    false,
+                    "Walking to your stasis chamber...",
+                )
+                .await?;
+
+                *bot_state.return_to_after_pulled.lock() =
+                    Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
+
+                info!("Walking to {trapdoor_pos:?}...");
+                let goal = ReachBlockPosGoal {
+                    pos: azalea::BlockPos::from(trapdoor_pos),
+                    chunk_storage: bot.world().read().chunks.clone(),
+                };
+                if OPTS.no_mining {
+                    bot.goto_without_mining(goal);
+                } else {
+                    bot.goto(goal);
+                }
+                *bot_state.pathfinding_requested_by.lock() = Some(sender.clone());
+            } else {
+                send_devnet_feedback(
+                    bot.username(),
+                    for_mc_id,
+                    true,
+                    "I'm not aware whether you have a pearl here. Sorry!",
+                )
+                .await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+pub async fn send_devnet_feedback(
+    own_username: impl AsRef<str>,
+    for_mc_id: Uuid,
+    error: bool,
+    message: impl AsRef<str>,
+) -> anyhow::Result<()> {
+    let devnet_tx = DEVNET_TX.lock().clone();
+    if let Some(devnet_tx) = devnet_tx {
+        devnet_tx
+            .send(devnet::Message::BotFeedback {
+                error,
+                sender: own_username.as_ref().to_owned(),
+                message: message.as_ref().to_owned(),
+                for_player: for_mc_id,
+            })
+            .await?;
+    }
+    Ok(())
 }

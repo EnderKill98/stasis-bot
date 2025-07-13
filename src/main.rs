@@ -1,6 +1,5 @@
-#![feature(let_chains)]
-
 pub mod commands;
+pub mod devnet;
 
 #[macro_use]
 extern crate tracing;
@@ -8,8 +7,8 @@ extern crate tracing;
 use anyhow::{Context, Result};
 use azalea::app::PluginGroup;
 use azalea::auth::game_profile::GameProfile;
-use azalea::entity::metadata::{AbstractLivingUsingItem, Health};
 use azalea::entity::LookDirection;
+use azalea::entity::metadata::{AbstractLivingUsingItem, Health};
 use azalea::inventory::components::Food;
 use azalea::inventory::{Inventory, ItemStackData};
 use azalea::packet::game::SendPacketEvent;
@@ -23,18 +22,18 @@ use azalea::registry::EntityKind;
 use azalea::swarm::DefaultSwarmPlugins;
 use azalea::task_pool::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use azalea::{
+    DefaultBotPlugins, DefaultPlugins, GameProfileComponent, Hunger, JoinOpts, Vec3,
     auth::AuthResult,
     blocks::Block,
     core::direction::Direction,
     ecs::query::With,
-    entity::{metadata::Player, EyeHeight, Pose, Position},
+    entity::{EyeHeight, Pose, Position, metadata::Player},
     inventory::SetSelectedHotbarSlotEvent,
-    pathfinder::{goals::BlockPosGoal, Pathfinder},
+    pathfinder::{Pathfinder, goals::BlockPosGoal},
     prelude::*,
     registry::Item,
     swarm::{Swarm, SwarmEvent},
     world::MinecraftEntityId,
-    DefaultBotPlugins, DefaultPlugins, GameProfileComponent, Hunger, JoinOpts, Vec3,
 };
 use bevy_log::LogPlugin;
 use clap::Parser;
@@ -143,6 +142,14 @@ struct Opts {
     /// How many tasks to create for IO. 0 = Automatic
     #[clap(short = 'i', long, default_value = "0")]
     io_threads: usize,
+
+    /// Base URL to devnet API
+    #[clap(long)]
+    devnet_url: Option<String>,
+
+    /// Token to access devnet API (as destination)
+    #[clap(long)]
+    devnet_access_token: Option<String>,
 }
 
 pub const FOOD_ITEMS: &[Item] = &[
@@ -183,6 +190,8 @@ pub const FOOD_ITEMS: &[Item] = &[
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
 static INPUTLINE_QUEUE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+static DEVNET_RX_QUEUE: Mutex<VecDeque<devnet::Message>> = Mutex::new(VecDeque::new());
+static DEVNET_TX: Mutex<Option<tokio::sync::mpsc::Sender<devnet::Message>>> = Mutex::new(None);
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 struct BlockPos {
@@ -282,11 +291,15 @@ async fn async_main() -> Result<()> {
         }
 
         if OPTS.quiet {
-            info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
+            info!(
+                "Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet)."
+            );
         }
 
         if let Some(autolog_hp) = OPTS.autolog_hp {
-            info!("Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem.");
+            info!(
+                "Will automatically logout and quit, when getting to or below {autolog_hp} HP or popping a totem."
+            );
         }
 
         if OPTS.no_stasis {
@@ -299,6 +312,11 @@ async fn async_main() -> Result<()> {
 
         if OPTS.auto_eat {
             info!("Automatic Eating is enabled.");
+        }
+
+        if OPTS.devnet_url.is_some() != OPTS.devnet_access_token.is_some() {
+            error!("--devnet-url and --devnet-access-token must both be specified or omitted!");
+            std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
         }
 
         info!("Admins: {}", OPTS.admin.join(", "));
@@ -356,17 +374,38 @@ async fn async_main() -> Result<()> {
         account.username, OPTS.server_address
     );
 
+    if let Some(ref url) = OPTS.devnet_url
+        && let Some(ref access_token) = OPTS.devnet_access_token
+    {
+        let url = url.to_owned();
+        let access_token = access_token.to_owned();
+        let (msg_tx_tx, msg_tx_rx) = tokio::sync::mpsc::channel(512);
+        //msg_tx_tx.send(devnet::Message::DestinationsRequest).await?;
+        *DEVNET_TX.lock() = Some(msg_tx_tx);
+
+        let (msg_rx_tx, mut msg_rx_rx) = tokio::sync::mpsc::channel(512);
+        tokio::spawn(async move {
+            while let Some(message) = msg_rx_rx.recv().await {
+                DEVNET_RX_QUEUE.lock().push_back(message);
+            }
+            error!("Receiver for devnet messages ended unexpectedly!");
+        });
+        tokio::spawn(devnet::run_forever(url, access_token, msg_tx_rx, msg_rx_tx));
+    }
+
     // Read input and put in queue
     if std::io::stdin().is_terminal() {
-        std::thread::spawn(|| loop {
-            let mut line = String::new();
-            if let Err(err) = std::io::stdin().read_line(&mut line) {
-                warn!("Not accepting any input anymore because reading failed: Err: {err}");
-                return;
-            }
-            let line: &str = line.trim();
+        std::thread::spawn(|| {
+            loop {
+                let mut line = String::new();
+                if let Err(err) = std::io::stdin().read_line(&mut line) {
+                    warn!("Not accepting any input anymore because reading failed: Err: {err}");
+                    return;
+                }
+                let line: &str = line.trim();
 
-            INPUTLINE_QUEUE.lock().push_back(line.to_owned());
+                INPUTLINE_QUEUE.lock().push_back(line.to_owned());
+            }
         });
     }
 
@@ -632,7 +671,9 @@ impl BotState {
             }
             EatingProgress::StartedEating => {
                 if eating_progress.0.elapsed() > Duration::from_secs(3) {
-                    warn!("Attempted to eat, but it failed (no interacting detected more than 3s later)!");
+                    warn!(
+                        "Attempted to eat, but it failed (no interacting detected more than 3s later)!"
+                    );
                     *eating_progress = (Instant::now(), EatingProgress::NotEating);
                 } else if self.is_interacting(bot) {
                     *eating_progress = (Instant::now(), EatingProgress::IsEating);
@@ -641,7 +682,9 @@ impl BotState {
             }
             EatingProgress::IsEating => {
                 if eating_progress.0.elapsed() > Duration::from_secs(15) {
-                    warn!("Eating took too long! Perhaps interaction got confused with another action, the server is seriously lagging or eating a modified food item that takes forever (in which case ignore this)!");
+                    warn!(
+                        "Eating took too long! Perhaps interaction got confused with another action, the server is seriously lagging or eating a modified food item that takes forever (in which case ignore this)!"
+                    );
                     *eating_progress = (Instant::now(), EatingProgress::NotEating);
                 } else if !self.is_interacting(bot) {
                     *eating_progress = (Instant::now(), EatingProgress::NotEating);
@@ -725,7 +768,9 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                         }
                     }
                 } else {
-                    warn!("Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked.");
+                    warn!(
+                        "Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked."
+                    );
                 }
             }
         }
@@ -791,7 +836,9 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                     if remembered_trapdoor_positions.get(&playername)
                                         == Some(&block_pos)
                                     {
-                                        info!("Found that {playername} is already using that trapdoor position. Removed that player!");
+                                        info!(
+                                            "Found that {playername} is already using that trapdoor position. Removed that player!"
+                                        );
                                         remembered_trapdoor_positions.remove(&playername);
                                     }
                                 }
@@ -803,11 +850,13 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                                 }
                                 let bot_state = bot_state.clone();
                                 tokio::spawn(async move {
-                                    match bot_state
-                                        .save_stasis()
-                                        .await {
-                                        Ok(_) => info!("Saved remembered trapdoor positions to file."),
-                                        Err(err) => error!("Failed to save remembered trapdoor positions to file: {err:?}"),
+                                    match bot_state.save_stasis().await {
+                                        Ok(_) => {
+                                            info!("Saved remembered trapdoor positions to file.")
+                                        }
+                                        Err(err) => error!(
+                                            "Failed to save remembered trapdoor positions to file: {err:?}"
+                                        ),
                                     }
                                 });
                             }
@@ -876,6 +925,20 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
         },
         Event::Tick => {
             bot_state.eat_tick(&mut bot);
+
+            // DevNet integration
+            loop {
+                let next_devnet_message = DEVNET_RX_QUEUE.lock().pop_front();
+                if let Some(message) = next_devnet_message {
+                    if OPTS.no_stasis {
+                        continue; // Don't bother handling
+                    }
+
+                    commands::handle_devnet_message(&mut bot, &bot_state, message).await?;
+                } else {
+                    break;
+                }
+            }
 
             // 2b2t Anti AFK
             if OPTS.periodic_swing {
@@ -1028,6 +1091,7 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     }
                 }
             }
+            drop(pathfinding_requested_by);
         }
         _ => {}
     }
