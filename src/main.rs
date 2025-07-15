@@ -888,11 +888,6 @@ async fn handle(mut bot: Client, event: Event, mut bot_state: BotState) -> anyho
                     // At this point the entity was already removed from the ecs world!
                     if let Some(profile) = bot_state.visual_range_cache.lock().remove(entity_id) {
                         info!("{} ({}) left visual range!", profile.name, profile.uuid)
-                    } else {
-                        warn!(
-                            "A player with no known GameProfile (id: {}) left visual range!",
-                            entity_id.0
-                        )
                     }
                 }
             }
