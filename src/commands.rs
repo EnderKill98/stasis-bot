@@ -1,4 +1,4 @@
-use crate::{BotState, DEVNET_TX, EatingProgress, OPTS, devnet};
+use crate::{BotState, DEVNET_TX, OPTS, devnet};
 use azalea::core::direction::Direction;
 use azalea::inventory::operations::ClickType;
 use azalea::inventory::{Inventory, ItemStack, SetSelectedHotbarSlotEvent};
@@ -18,10 +18,9 @@ use azalea::{
     world::InstanceName,
 };
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
 use uuid::Uuid;
 
-pub fn execute(
+pub async fn execute(
     bot: &mut Client,
     bot_state: &BotState,
     sender: String,
@@ -37,7 +36,7 @@ pub fn execute(
     match command.as_str() {
         "help" => {
             let mut commands = vec!["!help", "!about"];
-            if !OPTS.no_stasis {
+            if bot_state.stasis.is_some() {
                 commands.push("!tp");
             }
             if sender_is_admin {
@@ -48,7 +47,6 @@ pub fn execute(
                     "!selecthand",
                     "!drop",
                     "!dropall",
-                    "!eat",
                     "!swap",
                     "!printinv",
                     "!equip",
@@ -80,17 +78,19 @@ pub fn execute(
             Ok(true)
         }
         "tp" => {
-            let remembered_trapdoor_positions = bot_state.remembered_trapdoor_positions.lock();
-            if OPTS.no_stasis {
+            let stasis = bot_state.stasis.as_ref();
+            if stasis.is_none() {
                 send_command(
                     bot,
                     &format!("msg {sender} I'm not allowed to do pearl duties :(..."),
                 );
                 return Ok(true);
             }
+            let stasis = stasis.unwrap();
+            let remembered_trapdoor_positions = stasis.remembered_trapdoor_positions.lock();
 
             if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
-                if bot_state.pathfinding_requested_by.lock().is_some() {
+                if stasis.pathfinding_requested_by.lock().is_some() {
                     send_command(
                         bot,
                         &format!(
@@ -104,7 +104,7 @@ pub fn execute(
                     &format!("msg {sender} Walking to your stasis chamber..."),
                 );
 
-                *bot_state.return_to_after_pulled.lock() =
+                *stasis.return_to_after_pulled.lock() =
                     Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
 
                 info!("Walking to {trapdoor_pos:?}...");
@@ -117,7 +117,7 @@ pub fn execute(
                 } else {
                     bot.goto(goal);
                 }
-                *bot_state.pathfinding_requested_by.lock() = Some(sender.clone());
+                *stasis.pathfinding_requested_by.lock() = Some(sender.clone());
             } else {
                 send_command(
                     bot,
@@ -386,26 +386,6 @@ pub fn execute(
             Ok(true)
         }
 
-        "eat" => {
-            if !sender_is_admin {
-                send_command(
-                    bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
-                );
-                return Ok(true);
-            }
-            if bot_state.attempt_eat(bot) {
-                *bot_state.eating_progress.lock() = (Instant::now(), EatingProgress::StartedEating);
-                send_command(bot, &format!("msg {sender} Attempting to eat."));
-            } else {
-                send_command(bot, &format!("msg {sender} No edibles in my hotbar!"));
-            }
-
-            Ok(true)
-        }
-
         "swap" => {
             if !sender_is_admin {
                 send_command(
@@ -632,6 +612,20 @@ pub async fn handle_devnet_message(
     bot_state: &BotState,
     message: devnet::Message,
 ) -> anyhow::Result<()> {
+    let stasis = bot_state.stasis.as_ref();
+    if stasis.is_none() {
+        match message {
+            devnet::Message::CheckRequest { for_mc_id, .. }
+            | devnet::Message::PullRequest { for_mc_id, .. } => {
+                send_devnet_feedback(bot.username(), for_mc_id, true, "Stasis is not enabled!")
+                    .await?;
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
+    let stasis = stasis.unwrap();
+
     match message {
         devnet::Message::CheckRequest {
             for_mc_id,
@@ -653,12 +647,11 @@ pub async fn handle_devnet_message(
                 return Ok(());
             }
             let sender = sender.unwrap();
-
             info!(
                 "Got devnet request to check pearl for {sender} ({for_mc_id}) at destination {destination}"
             );
 
-            let has_trapdoor = bot_state
+            let has_trapdoor = stasis
                 .remembered_trapdoor_positions
                 .lock()
                 .contains_key(&sender);
@@ -702,13 +695,13 @@ pub async fn handle_devnet_message(
                 "Got devnet request to pull pearl {pearl_index} for {sender} ({for_mc_id}) at destination {destination}"
             );
 
-            let trapdoor_pos = bot_state
+            let trapdoor_pos = stasis
                 .remembered_trapdoor_positions
                 .lock()
                 .get(&sender)
                 .cloned();
             if let Some(trapdoor_pos) = trapdoor_pos {
-                if bot_state.pathfinding_requested_by.lock().is_some() {
+                if stasis.pathfinding_requested_by.lock().is_some() {
                     send_devnet_feedback(
                         bot.username(),
                         for_mc_id,
@@ -727,7 +720,7 @@ pub async fn handle_devnet_message(
                 )
                 .await?;
 
-                *bot_state.return_to_after_pulled.lock() =
+                *stasis.return_to_after_pulled.lock() =
                     Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
 
                 info!("Walking to {trapdoor_pos:?}...");
@@ -740,7 +733,7 @@ pub async fn handle_devnet_message(
                 } else {
                     bot.goto(goal);
                 }
-                *bot_state.pathfinding_requested_by.lock() = Some(sender.clone());
+                *stasis.pathfinding_requested_by.lock() = Some(sender.clone());
             } else {
                 send_devnet_feedback(
                     bot.username(),

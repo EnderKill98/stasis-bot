@@ -25,7 +25,7 @@ anyhow = "1"
 
 # The amazing bot library!
 bevy_log = "0.15.2" # Whatever azalea is using
-azalea = { git = "https://github.com/azalea-rs/azalea", rev = "8af265e4", default-features = false, features = [ "log" ] }
+azalea = { git = "https://github.com/azalea-rs/azalea", rev = "8af265e4", default-features = false, features = [ "log", "serde" ] }
 #azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", branch = "1.21.4" }
 
 parking_lot = "0.12"
@@ -44,3 +44,5 @@ uuid = { version = "1", features = [ "serde" ] }
 #tungstenite = "0.27"
 tokio-tungstenite = { version = "0.27", features = [ "native-tls" ] }
 futures-util = "0.3"
+
+async-trait = "0.1"

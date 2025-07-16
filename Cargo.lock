@@ -233,6 +233,7 @@ dependencies = [
  "num-traits",
  "parking_lot",
  "rustc-hash 2.1.1",
+ "serde",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -551,6 +552,7 @@ dependencies = [
  "nohash-hasher",
  "parking_lot",
  "rustc-hash 2.1.1",
+ "serde",
  "simdnbt",
  "thiserror 2.0.12",
  "tracing",
@@ -1212,7 +1214,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2623,7 +2625,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2944,6 +2946,7 @@ name = "stasis-bot"
 version = "0.4.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "azalea",
  "bevy_log",
  "clap",
@@ -3018,7 +3021,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
