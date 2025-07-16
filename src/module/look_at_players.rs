@@ -23,21 +23,13 @@ impl Module for LookAtPlayersModule {
         "LookAtPlayers"
     }
 
-    async fn handle(
-        &self,
-        mut bot: Client,
-        event: &Event,
-        _bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, mut bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Tick => {
                 // Look at players
                 let is_pathfinding = {
                     let mut ecs = bot.ecs.lock();
-                    let pathfinder: &Pathfinder = ecs
-                        .query::<&Pathfinder>()
-                        .get_mut(&mut *ecs, bot.entity)
-                        .unwrap();
+                    let pathfinder: &Pathfinder = ecs.query::<&Pathfinder>().get_mut(&mut *ecs, bot.entity).unwrap();
                     pathfinder.goal.is_some()
                 };
 
@@ -49,10 +41,7 @@ impl Module for LookAtPlayersModule {
 
                     let mut closest_eye_pos = None;
                     let mut closest_dist_sqrt = f64::MAX;
-                    let mut query =
-                        bot.ecs
-                            .lock()
-                            .query::<(&Player, &Position, &EyeHeight, &Pose, &MinecraftEntityId)>();
+                    let mut query = bot.ecs.lock().query::<(&Player, &Position, &EyeHeight, &Pose, &MinecraftEntityId)>();
                     for (_player, pos, eye_height, pose, entity_id) in query.iter(&bot.ecs.lock()) {
                         if entity_id.0 == my_entity_id {
                             continue;
@@ -66,9 +55,7 @@ impl Module for LookAtPlayersModule {
                         };
                         let eye_pos = **pos + Vec3::new(0f64, y_offset, 0f64);
                         let dist_sqrt = my_eye_pos.distance_squared_to(pos);
-                        if (closest_eye_pos.is_none() || dist_sqrt < closest_dist_sqrt)
-                            && dist_sqrt <= (self.max_distance * self.max_distance) as f64
-                        {
+                        if (closest_eye_pos.is_none() || dist_sqrt < closest_dist_sqrt) && dist_sqrt <= (self.max_distance * self.max_distance) as f64 {
                             closest_eye_pos = Some(eye_pos);
                             closest_dist_sqrt = dist_sqrt;
                         }

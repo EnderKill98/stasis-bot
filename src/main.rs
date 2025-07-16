@@ -194,32 +194,19 @@ fn main() -> Result<()> {
 
     let reg = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(!OPTS.no_color)
-                .with_thread_names(true),
-        );
+        .with(tracing_subscriber::fmt::layer().with_ansi(!OPTS.no_color).with_thread_names(true));
     if let Some(logfile_path) = &OPTS.log_file {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(logfile_path)
             .context("Open logfile for appending")?;
-        reg.with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(file),
-        )
-        .init();
+        reg.with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(file)).init();
     } else {
         reg.init();
     }
 
-    let worker_threads = if OPTS.worker_threads == 0 {
-        4
-    } else {
-        OPTS.worker_threads
-    };
+    let worker_threads = if OPTS.worker_threads == 0 { 4 } else { OPTS.worker_threads };
     info!("Worker threads: {worker_threads}");
 
     let worker_thread_num = AtomicU32::new(1);
@@ -241,10 +228,7 @@ fn main() -> Result<()> {
 async fn async_main() -> Result<()> {
     if !OPTS.just_print_access_token {
         if OPTS.offline_username.is_none() {
-            info!(
-                "File used to store Authentication information: {:?}",
-                OPTS.auth_file
-            );
+            info!("File used to store Authentication information: {:?}", OPTS.auth_file);
         }
 
         if OPTS.no_color {
@@ -252,15 +236,11 @@ async fn async_main() -> Result<()> {
         }
 
         if OPTS.quiet {
-            info!(
-                "Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet)."
-            );
+            info!("Will not automatically send any chat commands (workaround for getting kicked because of broken ChatCommand packet).");
         }
 
         if let Some(emergency_quit) = OPTS.emergency_quit {
-            info!(
-                "Will automatically logout and quit, when reaching {emergency_quit} HP or popping a totem."
-            );
+            info!("Will automatically logout and quit, when reaching {emergency_quit} HP or popping a totem.");
         }
 
         if OPTS.no_stasis {
@@ -303,9 +283,7 @@ async fn async_main() -> Result<()> {
             username: auth_result.profile.name,
             access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
             uuid: Some(auth_result.profile.id),
-            account_opts: azalea::AccountOpts::Microsoft {
-                email: "default".to_owned(),
-            },
+            account_opts: azalea::AccountOpts::Microsoft { email: "default".to_owned() },
             // we don't do chat signing by default unless the user asks for it
             certs: None,
         }
@@ -323,17 +301,11 @@ async fn async_main() -> Result<()> {
     }
 
     if OPTS.sign_chat {
-        account
-            .request_certs()
-            .await
-            .context("Request certs for chat signing")?;
+        account.request_certs().await.context("Request certs for chat signing")?;
         info!("Chat signing is enabled. Retreived certs for it.");
     }
 
-    info!(
-        "Logged in as {}. Connecting to \"{}\"...",
-        account.username, OPTS.server_address
-    );
+    info!("Logged in as {}. Connecting to \"{}\"...", account.username, OPTS.server_address);
 
     if let Some(ref url) = OPTS.devnet_url
         && let Some(ref access_token) = OPTS.devnet_access_token
@@ -378,16 +350,8 @@ async fn async_main() -> Result<()> {
 
         // Use 25% of cores for IO, at least 1, no more than 4
         io: TaskPoolThreadAssignmentPolicy {
-            min_threads: if OPTS.io_threads == 0 {
-                (account_count / 12).max(2)
-            } else {
-                OPTS.io_threads
-            },
-            max_threads: if OPTS.io_threads == 0 {
-                (account_count / 12).max(2)
-            } else {
-                OPTS.io_threads
-            },
+            min_threads: if OPTS.io_threads == 0 { (account_count / 12).max(2) } else { OPTS.io_threads },
+            max_threads: if OPTS.io_threads == 0 { (account_count / 12).max(2) } else { OPTS.io_threads },
             percent: 0.25,
         },
 
@@ -422,24 +386,14 @@ async fn async_main() -> Result<()> {
         },
     };
     let builder = azalea::swarm::SwarmBuilder::new_without_plugins()
-        .add_plugins(
-            DefaultPlugins
-                .build()
-                .disable::<TaskPoolPlugin>()
-                .disable::<LogPlugin>(),
-        )
+        .add_plugins(DefaultPlugins.build().disable::<TaskPoolPlugin>().disable::<LogPlugin>())
         .add_plugins(DefaultBotPlugins)
         .add_plugins(DefaultSwarmPlugins)
-        .add_plugins(TaskPoolPlugin {
-            task_pool_options: task_opts,
-        })
+        .add_plugins(TaskPoolPlugin { task_pool_options: task_opts })
         .set_handler(handle)
         .set_swarm_handler(swarm_handle)
         .add_account(account.clone());
-    builder
-        .start(OPTS.server_address.as_str())
-        .await
-        .context("Running swarm")?
+    builder.start(OPTS.server_address.as_str()).await.context("Running swarm")?
 }
 
 async fn auth() -> Result<AuthResult> {
@@ -468,11 +422,7 @@ pub struct BotState {
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
-    if enabled {
-        Some(Default::default())
-    } else {
-        None
-    }
+    if enabled { Some(Default::default()) } else { None }
 }
 
 impl Default for BotState {
@@ -484,14 +434,10 @@ impl Default for BotState {
             periodic_swing: default_if(OPTS.periodic_swing),
             stasis: default_if(!OPTS.no_stasis),
             visual_range: Some(Default::default()),
-            look_at_players: OPTS
-                .look_at_players
-                .map(|dist| LookAtPlayersModule::new(dist)),
+            look_at_players: OPTS.look_at_players.map(|dist| LookAtPlayersModule::new(dist)),
             soundness: Some(Default::default()),
             emergency_quit: OPTS.emergency_quit.map(|hp| EmergencyQuitModule::new(hp)),
-            devnet_integration: default_if(
-                OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some(),
-            ),
+            devnet_integration: default_if(OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some()),
         }
     }
 }
@@ -630,9 +576,7 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> anyhow::R
                     .unwrap_or(true)
                 {
                     info!("Executing command {command:?} sent by {sender:?} with args {args:?}");
-                    match commands::execute(&mut bot, &bot_state, sender.clone(), command, args)
-                        .await
-                    {
+                    match commands::execute(&mut bot, &bot_state, sender.clone(), command, args).await {
                         Ok(executed) => {
                             if executed {
                                 *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
@@ -645,9 +589,7 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> anyhow::R
                         }
                     }
                 } else {
-                    warn!(
-                        "Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked."
-                    );
+                    warn!("Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked.");
                 }
             }
         }
@@ -713,10 +655,7 @@ async fn swarm_rejoin(swarm: Swarm, state: SwarmState, account: Account, join_op
         reconnect_after_secs = (reconnect_after_secs * 2).min(60 * 30); // 2x or max 30 minutes
 
         info!("Joining again...");
-        match swarm
-            .add_with_opts(&account, state.clone(), &join_opts)
-            .await
-        {
+        match swarm.add_with_opts(&account, state.clone(), &join_opts).await {
             Ok(_) => return,
             Err(join_err) => error!("Failed to rejoin: {join_err}"), // Keep rejoining
         }
@@ -726,12 +665,7 @@ async fn swarm_rejoin(swarm: Swarm, state: SwarmState, account: Account, join_op
 async fn swarm_handle(swarm: Swarm, event: SwarmEvent, state: SwarmState) -> anyhow::Result<()> {
     match event {
         SwarmEvent::Disconnect(account, join_opts) => {
-            tokio::spawn(swarm_rejoin(
-                swarm.clone(),
-                state.clone(),
-                (*account).clone(),
-                join_opts.clone(),
-            ));
+            tokio::spawn(swarm_rejoin(swarm.clone(), state.clone(), (*account).clone(), join_opts.clone()));
         }
         _ => {}
     }

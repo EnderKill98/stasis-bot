@@ -19,31 +19,18 @@ impl Module for VisualRangeModule {
         "VisualRange"
     }
 
-    async fn handle(
-        &self,
-        bot: Client,
-        event: &Event,
-        _bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Packet(packet) => match packet.as_ref() {
                 ClientboundGamePacket::AddEntity(packet) => {
                     if packet.entity_type == EntityKind::Player {
                         match bot.tab_list().get(&packet.uuid) {
                             Some(player_info) => {
-                                info!(
-                                    "{} ({}) entered visual range!",
-                                    player_info.profile.name, player_info.uuid
-                                );
-                                self.visual_range_cache
-                                    .lock()
-                                    .insert(packet.id, player_info.profile.clone());
+                                info!("{} ({}) entered visual range!", player_info.profile.name, player_info.uuid);
+                                self.visual_range_cache.lock().insert(packet.id, player_info.profile.clone());
                             }
                             None => {
-                                warn!(
-                                    "An unknown player (id: {}, uuid: {}) entered visual range!",
-                                    packet.id, packet.uuid
-                                );
+                                warn!("An unknown player (id: {}, uuid: {}) entered visual range!", packet.id, packet.uuid);
                             }
                         }
                     }

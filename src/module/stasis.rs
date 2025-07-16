@@ -10,9 +10,7 @@ use azalea::pathfinder::goals::BlockPosGoal;
 use azalea::pathfinder::{Pathfinder, PathfinderClientExt};
 use azalea::protocol::packets::game::s_interact::InteractionHand;
 use azalea::protocol::packets::game::s_use_item_on::BlockHit;
-use azalea::protocol::packets::game::{
-    ClientboundGamePacket, ServerboundGamePacket, ServerboundUseItemOn,
-};
+use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundGamePacket, ServerboundUseItemOn};
 use azalea::registry::EntityKind;
 use azalea::world::MinecraftEntityId;
 use azalea::{BlockPos, Client, Event, GameProfileComponent, Vec3};
@@ -35,9 +33,7 @@ impl StasisModule {
 
     pub async fn load_stasis(&self) -> anyhow::Result<()> {
         let remembered_trapdoor_positions_path = Self::remembered_trapdoor_positions_path();
-        if remembered_trapdoor_positions_path.exists()
-            && !remembered_trapdoor_positions_path.is_dir()
-        {
+        if remembered_trapdoor_positions_path.exists() && !remembered_trapdoor_positions_path.is_dir() {
             *self.remembered_trapdoor_positions.lock() = serde_json::from_str(
                 &tokio::fs::read_to_string(remembered_trapdoor_positions_path)
                     .await
@@ -58,8 +54,7 @@ impl StasisModule {
 
     pub async fn save_stasis(&self) -> anyhow::Result<()> {
         let json =
-            serde_json::to_string_pretty(&*self.remembered_trapdoor_positions.as_ref().lock())
-                .context("Convert remembered_trapdoor_positions to json")?;
+            serde_json::to_string_pretty(&*self.remembered_trapdoor_positions.as_ref().lock()).context("Convert remembered_trapdoor_positions to json")?;
         tokio::fs::write(Self::remembered_trapdoor_positions_path(), json)
             .await
             .context("Save remembered_trapdoor_positions as file")?;
@@ -73,12 +68,7 @@ impl Module for StasisModule {
         "Stasis"
     }
 
-    async fn handle(
-        &self,
-        bot: Client,
-        event: &Event,
-        _bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Login => {
                 info!("Loading remembered trapdoor positions...");
@@ -89,17 +79,11 @@ impl Module for StasisModule {
                     if packet.entity_type == EntityKind::EnderPearl {
                         let owning_player_entity_id = packet.data as i32;
                         let mut bot = bot.clone();
-                        let entity = bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(
-                            |(entity_id,): &(&MinecraftEntityId,)| {
-                                entity_id.0 == owning_player_entity_id
-                            },
-                        );
+                        let entity =
+                            bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(|(entity_id,): &(&MinecraftEntityId,)| entity_id.0 == owning_player_entity_id);
                         if let Some(entity) = entity {
                             let game_profile = bot.entity_component::<GameProfileComponent>(entity);
-                            info!(
-                                "{} threw an EnderPearl at {}",
-                                game_profile.name, packet.position
-                            );
+                            info!("{} threw an EnderPearl at {}", game_profile.name, packet.position);
                             let mut found_trapdoor = None;
 
                             {
@@ -113,17 +97,11 @@ impl Module for StasisModule {
                                             (packet.position.y.floor() + 1.0) as i32 + y_offset,
                                             packet.position.z.floor() as i32,
                                         );
-                                        if let Some(state) =
-                                            world.get_block_state(&azalea_block_pos)
-                                        {
+                                        if let Some(state) = world.get_block_state(&azalea_block_pos) {
                                             let block = Box::<dyn Block>::from(state);
                                             if block.id().ends_with("_trapdoor") {
-                                                info!(
-                                                    "Detected trapdoor at {} for pearl thrown by {}",
-                                                    azalea_block_pos, game_profile.name
-                                                );
-                                                found_trapdoor =
-                                                    Some(BlockPos::from(azalea_block_pos));
+                                                info!("Detected trapdoor at {} for pearl thrown by {}", azalea_block_pos, game_profile.name);
+                                                found_trapdoor = Some(BlockPos::from(azalea_block_pos));
                                                 break;
                                             }
                                         }
@@ -132,46 +110,30 @@ impl Module for StasisModule {
                             }
 
                             if let Some(block_pos) = found_trapdoor {
-                                if self
-                                    .remembered_trapdoor_positions
-                                    .lock()
-                                    .get(&game_profile.name)
-                                    != Some(&block_pos)
-                                {
-                                    let mut remembered_trapdoor_positions =
-                                        self.remembered_trapdoor_positions.lock();
+                                if self.remembered_trapdoor_positions.lock().get(&game_profile.name) != Some(&block_pos) {
+                                    let mut remembered_trapdoor_positions = self.remembered_trapdoor_positions.lock();
                                     // Remove postions at same trapdoor
-                                    for playername in remembered_trapdoor_positions
-                                        .keys()
-                                        .map(|p| p.to_owned())
-                                        .collect::<Vec<_>>()
-                                    {
-                                        if remembered_trapdoor_positions.get(&playername)
-                                            == Some(&block_pos)
-                                        {
-                                            info!(
-                                                "Found that {playername} is already using that trapdoor position. Removed that player!"
-                                            );
+                                    for playername in remembered_trapdoor_positions.keys().map(|p| p.to_owned()).collect::<Vec<_>>() {
+                                        if remembered_trapdoor_positions.get(&playername) == Some(&block_pos) {
+                                            info!("Found that {playername} is already using that trapdoor position. Removed that player!");
                                             remembered_trapdoor_positions.remove(&playername);
                                         }
                                     }
-                                    remembered_trapdoor_positions
-                                        .insert(game_profile.name.clone(), block_pos);
+                                    remembered_trapdoor_positions.insert(game_profile.name.clone(), block_pos);
 
                                     if !OPTS.quiet {
-                                        bot.send_command_packet(&format!("msg {} You have thrown a pearl. Message me \"tp\" to get back here.", game_profile.name));
+                                        bot.send_command_packet(&format!(
+                                            "msg {} You have thrown a pearl. Message me \"tp\" to get back here.",
+                                            game_profile.name
+                                        ));
                                     }
                                     let self_clone = self.clone();
                                     tokio::spawn(async move {
                                         match self_clone.save_stasis().await {
                                             Ok(_) => {
-                                                info!(
-                                                    "Saved remembered trapdoor positions to file."
-                                                )
+                                                info!("Saved remembered trapdoor positions to file.")
                                             }
-                                            Err(err) => error!(
-                                                "Failed to save remembered trapdoor positions to file: {err:?}"
-                                            ),
+                                            Err(err) => error!("Failed to save remembered trapdoor positions to file: {err:?}"),
                                         }
                                     });
                                 }
@@ -185,23 +147,14 @@ impl Module for StasisModule {
                 let mut pathfinding_requested_by = self.pathfinding_requested_by.lock();
                 if let Some(ref requesting_player) = *pathfinding_requested_by {
                     let mut ecs = bot.ecs.lock();
-                    let pathfinder: &Pathfinder = ecs
-                        .query::<&Pathfinder>()
-                        .get_mut(&mut *ecs, bot.entity)
-                        .unwrap();
+                    let pathfinder: &Pathfinder = ecs.query::<&Pathfinder>().get_mut(&mut *ecs, bot.entity).unwrap();
 
                     if !pathfinder.is_calculating && pathfinder.goal.is_none() {
                         drop(ecs);
 
-                        if let Some(trapdoor_pos) = self
-                            .remembered_trapdoor_positions
-                            .lock()
-                            .remove(requesting_player)
-                        {
+                        if let Some(trapdoor_pos) = self.remembered_trapdoor_positions.lock().remove(requesting_player) {
                             if !OPTS.quiet {
-                                bot.send_command_packet(&format!(
-                                    "msg {requesting_player} Welcome back, {requesting_player}!"
-                                ));
+                                bot.send_command_packet(&format!("msg {requesting_player} Welcome back, {requesting_player}!"));
                             }
                             bot.ecs.lock().send_event(SendPacketEvent {
                                 sent_by: bot.entity,
@@ -223,9 +176,7 @@ impl Module for StasisModule {
                             });
 
                             *pathfinding_requested_by = None;
-                            if let Some(return_to_after_pulled) =
-                                self.return_to_after_pulled.lock().take()
-                            {
+                            if let Some(return_to_after_pulled) = self.return_to_after_pulled.lock().take() {
                                 info!("Returning to {return_to_after_pulled}...");
                                 let goal = BlockPosGoal(BlockPos {
                                     x: return_to_after_pulled.x.floor() as i32,
@@ -243,9 +194,7 @@ impl Module for StasisModule {
                             tokio::spawn(async move {
                                 match self_clone.save_stasis().await {
                                     Ok(_) => info!("Saved remembered trapdoor positions to file."),
-                                    Err(err) => error!(
-                                        "Failed to save remembered trapdoor positions to file: {err:?}"
-                                    ),
+                                    Err(err) => error!("Failed to save remembered trapdoor positions to file: {err:?}"),
                                 }
                             });
                         }

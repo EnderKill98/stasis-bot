@@ -11,12 +11,7 @@ impl Module for DevNetIntegrationModule {
         "DevNetIntegration"
     }
 
-    async fn handle(
-        &self,
-        mut bot: Client,
-        event: &Event,
-        bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, mut bot: Client, event: &Event, bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Tick => loop {
                 let next_devnet_message = DEVNET_RX_QUEUE.lock().pop_front();

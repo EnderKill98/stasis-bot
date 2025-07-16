@@ -13,9 +13,7 @@ pub struct SoundnessModule {}
 
 impl SoundnessModule {
     pub fn describe(bot: &mut Client, entity_id: i32) -> String {
-        let entity = bot.entity_by::<With<EntityKind>, (&MinecraftEntityId,)>(
-            |(id,): &(&MinecraftEntityId,)| id.0 == entity_id,
-        );
+        let entity = bot.entity_by::<With<EntityKind>, (&MinecraftEntityId,)>(|(id,): &(&MinecraftEntityId,)| id.0 == entity_id);
         if entity.is_none() {
             return format!("<Unknown entity {entity_id}>");
         }
@@ -42,12 +40,7 @@ impl Module for SoundnessModule {
         "Soundness"
     }
 
-    async fn handle(
-        &self,
-        mut bot: Client,
-        event: &Event,
-        _bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, mut bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Packet(packet) => match packet.as_ref() {
                 ClientboundGamePacket::EntityEvent(packet) => {
@@ -75,31 +68,25 @@ impl Module for SoundnessModule {
                                 .unwrap()
                                 .iter()
                                 .enumerate()
-                                .filter(|(index, (_identifier, _nbt_comp))| {
-                                    *index == attack_type_id as usize
-                                })
+                                .filter(|(index, (_identifier, _nbt_comp))| *index == attack_type_id as usize)
                                 .map(|(_index, (identifier, _nbt_comp))| identifier.to_owned())
                                 .find(|_| true)
                         });
-                        let attack_type =
-                            if let Some(attack_type_identifier) = maybe_attack_type_identifier {
-                                if attack_type_identifier.namespace == "minecraft" {
-                                    attack_type_identifier.path.to_string()
-                                } else {
-                                    attack_type_identifier.to_string()
-                                }
+                        let attack_type = if let Some(attack_type_identifier) = maybe_attack_type_identifier {
+                            if attack_type_identifier.namespace == "minecraft" {
+                                attack_type_identifier.path.to_string()
                             } else {
-                                format!("TypeId {attack_type_id}")
-                            };
+                                attack_type_identifier.to_string()
+                            }
+                        } else {
+                            format!("TypeId {attack_type_id}")
+                        };
                         if cause_id.0 == direct_id.0 {
                             direct_id = OptionalEntityId(None);
                         }
 
                         match (cause_id, direct_id) {
-                            (
-                                OptionalEntityId(Some(source_cause)),
-                                OptionalEntityId(Some(source_direct_id)),
-                            ) => {
+                            (OptionalEntityId(Some(source_cause)), OptionalEntityId(Some(source_direct_id))) => {
                                 info!(
                                     "Received {} damage by {} using {}",
                                     attack_type,
@@ -108,11 +95,7 @@ impl Module for SoundnessModule {
                                 );
                             }
                             (OptionalEntityId(Some(source_cause)), OptionalEntityId(None)) => {
-                                info!(
-                                    "Received {} damage by {}",
-                                    attack_type,
-                                    Self::describe(&mut bot, source_cause as i32)
-                                );
+                                info!("Received {} damage by {}", attack_type, Self::describe(&mut bot, source_cause as i32));
                             }
                             _ => {
                                 info!("Received {} damage", attack_type);

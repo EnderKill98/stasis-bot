@@ -21,12 +21,7 @@ impl Module for EmergencyQuitModule {
         "EmergencyQuit"
     }
 
-    async fn handle(
-        &self,
-        mut bot: Client,
-        event: &Event,
-        _bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, mut bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Packet(packet) => match packet.as_ref() {
                 ClientboundGamePacket::EntityEvent(packet) => {
@@ -40,10 +35,7 @@ impl Module for EmergencyQuitModule {
                 }
                 ClientboundGamePacket::SetHealth(packet) => {
                     if packet.health <= self.hp_threshold {
-                        warn!(
-                            "My Health got below {:.02}! Disconnecting and quitting...",
-                            self.hp_threshold
-                        );
+                        warn!("My Health got below {:.02}! Disconnecting and quitting...", self.hp_threshold);
                         bot.disconnect();
                         std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
                     }

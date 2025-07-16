@@ -23,10 +23,7 @@ pub enum Message {
     #[serde(rename_all = "camelCase")]
     DestinationsResponse { destinations: Vec<Destination> },
     #[serde(rename = "check_request")]
-    CheckRequest {
-        destination: String,
-        for_mc_id: Uuid,
-    },
+    CheckRequest { destination: String, for_mc_id: Uuid },
     #[serde(rename_all = "camelCase")]
     CheckResponse {
         // destination: String, // Not needed from destination (auto-added for client)
@@ -34,11 +31,7 @@ pub enum Message {
         pearls: Vec<serde_json::Value>, // JSON Objects
     },
     #[serde(rename_all = "camelCase")]
-    PullRequest {
-        destination: String,
-        pearl_index: i32,
-        for_mc_id: Uuid,
-    },
+    PullRequest { destination: String, pearl_index: i32, for_mc_id: Uuid },
     #[serde(rename_all = "camelCase")]
     BotFeedback {
         error: bool,
@@ -49,12 +42,7 @@ pub enum Message {
     },
 }
 
-pub async fn run_forever(
-    url: String,
-    access_token: String,
-    mut message_tx: Receiver<Message>,
-    mut message_rx: Sender<Message>,
-) -> ! {
+pub async fn run_forever(url: String, access_token: String, mut message_tx: Receiver<Message>, mut message_rx: Sender<Message>) -> ! {
     loop {
         if let Err(err) = run(&url, &access_token, &mut message_tx, &mut message_rx).await {
             error!("DevNet connection failed: {err:?}");
@@ -63,16 +51,10 @@ pub async fn run_forever(
     }
 }
 
-async fn run(
-    url: &str,
-    access_token: &str,
-    message_tx: &mut Receiver<Message>,
-    message_rx: &mut Sender<Message>,
-) -> anyhow::Result<()> {
+async fn run(url: &str, access_token: &str, message_tx: &mut Receiver<Message>, message_rx: &mut Sender<Message>) -> anyhow::Result<()> {
     info!("Connecting to DevNet...");
     let uri = tokio_tungstenite::tungstenite::http::Uri::from_str(url)?;
-    let request = tokio_tungstenite::tungstenite::ClientRequestBuilder::new(uri)
-        .with_header("Authorization", format!("Bot {access_token}"));
+    let request = tokio_tungstenite::tungstenite::ClientRequestBuilder::new(uri).with_header("Authorization", format!("Bot {access_token}"));
     let (mut socket, response) = tokio_tungstenite::connect_async(request).await?;
 
     if response.status().as_u16() >= 400 {

@@ -6,9 +6,7 @@ use azalea::inventory::components::Food;
 use azalea::inventory::{Inventory, ItemStackData, SetSelectedHotbarSlotEvent};
 use azalea::packet::game::SendPacketEvent;
 use azalea::protocol::packets::game::s_interact::InteractionHand;
-use azalea::protocol::packets::game::{
-    ServerboundGamePacket, ServerboundSetCarriedItem, ServerboundUseItem,
-};
+use azalea::protocol::packets::game::{ServerboundGamePacket, ServerboundSetCarriedItem, ServerboundUseItem};
 use azalea::{Client, Event, Hunger};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -67,11 +65,8 @@ impl AutoEatModule {
         let inv = bot.entity_component::<Inventory>(bot.entity);
         let inv_menu = inv.inventory_menu;
         for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
-            if let Some(item_stack_data) = inv_menu.slot(slot).and_then(|stack| stack.as_present())
-            {
-                if item_stack_data.components.get::<Food>().is_some()
-                    || FOOD_ITEMS.contains(&item_stack_data.kind)
-                {
+            if let Some(item_stack_data) = inv_menu.slot(slot).and_then(|stack| stack.as_present()) {
+                if item_stack_data.components.get::<Food>().is_some() || FOOD_ITEMS.contains(&item_stack_data.kind) {
                     eat_item = Some((hotbar_slot as u8, item_stack_data.to_owned()));
                     break;
                 }
@@ -88,15 +83,10 @@ impl AutoEatModule {
             let mut ecs = bot.ecs.lock();
             let entity = bot.entity;
 
-            ecs.send_event(SetSelectedHotbarSlotEvent {
-                entity,
-                slot: eat_hotbar_slot,
-            });
+            ecs.send_event(SetSelectedHotbarSlotEvent { entity, slot: eat_hotbar_slot });
             ecs.send_event(SendPacketEvent {
                 sent_by: entity,
-                packet: ServerboundGamePacket::SetCarriedItem(ServerboundSetCarriedItem {
-                    slot: eat_hotbar_slot as u16,
-                }),
+                packet: ServerboundGamePacket::SetCarriedItem(ServerboundSetCarriedItem { slot: eat_hotbar_slot as u16 }),
             });
 
             ecs.send_event(SendPacketEvent {
@@ -129,9 +119,7 @@ impl AutoEatModule {
                 let health = bot.component::<Health>();
                 let hunger = bot.component::<Hunger>();
 
-                let should_eat = (hunger.food <= 20 - (3 * 2)
-                    || (health.0 < 20f32 && hunger.food < 20))
-                    && hunger.saturation <= 0.0;
+                let should_eat = (hunger.food <= 20 - (3 * 2) || (health.0 < 20f32 && hunger.food < 20)) && hunger.saturation <= 0.0;
 
                 if should_eat && eating_progress.0.elapsed() > Duration::from_millis(500) {
                     if self.attempt_eat(bot) {
@@ -141,9 +129,7 @@ impl AutoEatModule {
             }
             EatingProgress::StartedEating => {
                 if eating_progress.0.elapsed() > Duration::from_secs(3) {
-                    warn!(
-                        "Attempted to eat, but it failed (no interacting detected more than 3s later)!"
-                    );
+                    warn!("Attempted to eat, but it failed (no interacting detected more than 3s later)!");
                     *eating_progress = (Instant::now(), EatingProgress::NotEating);
                 } else if self.is_interacting(bot) {
                     *eating_progress = (Instant::now(), EatingProgress::IsEating);
@@ -171,12 +157,7 @@ impl Module for AutoEatModule {
         "AutoEat"
     }
 
-    async fn handle(
-        &self,
-        mut bot: Client,
-        event: &Event,
-        _bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, mut bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Tick => self.eat_tick(&mut bot),
             _ => {}

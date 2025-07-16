@@ -4,10 +4,7 @@ use azalea::inventory::operations::ClickType;
 use azalea::inventory::{Inventory, ItemStack, SetSelectedHotbarSlotEvent};
 use azalea::packet::game::SendPacketEvent;
 use azalea::protocol::packets::game::s_player_action::Action;
-use azalea::protocol::packets::game::{
-    ServerboundContainerClick, ServerboundGamePacket, ServerboundPlayerAction,
-    ServerboundSetCarriedItem,
-};
+use azalea::protocol::packets::game::{ServerboundContainerClick, ServerboundGamePacket, ServerboundPlayerAction, ServerboundSetCarriedItem};
 use azalea::registry::Item;
 use azalea::{
     BlockPos, GameProfileComponent, Vec3,
@@ -20,13 +17,7 @@ use azalea::{
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-pub async fn execute(
-    bot: &mut Client,
-    bot_state: &BotState,
-    sender: String,
-    mut command: String,
-    args: Vec<String>,
-) -> anyhow::Result<bool> {
+pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut command: String, args: Vec<String>) -> anyhow::Result<bool> {
     if command.starts_with('!') {
         command.remove(0);
     }
@@ -61,10 +52,7 @@ pub async fn execute(
             }
             commands.sort();
 
-            send_command(
-                bot,
-                &format!("msg {sender} Commands: {}", commands.join(", ")),
-            );
+            send_command(bot, &format!("msg {sender} Commands: {}", commands.join(", ")));
             Ok(true)
         }
         "about" => {
@@ -80,10 +68,7 @@ pub async fn execute(
         "tp" => {
             let stasis = bot_state.stasis.as_ref();
             if stasis.is_none() {
-                send_command(
-                    bot,
-                    &format!("msg {sender} I'm not allowed to do pearl duties :(..."),
-                );
+                send_command(bot, &format!("msg {sender} I'm not allowed to do pearl duties :(..."));
                 return Ok(true);
             }
             let stasis = stasis.unwrap();
@@ -93,19 +78,13 @@ pub async fn execute(
                 if stasis.pathfinding_requested_by.lock().is_some() {
                     send_command(
                         bot,
-                        &format!(
-                            "msg {sender} Please ask again in a bit. I'm currently already going somewhere..."
-                        ),
+                        &format!("msg {sender} Please ask again in a bit. I'm currently already going somewhere..."),
                     );
                     return Ok(true);
                 }
-                send_command(
-                    bot,
-                    &format!("msg {sender} Walking to your stasis chamber..."),
-                );
+                send_command(bot, &format!("msg {sender} Walking to your stasis chamber..."));
 
-                *stasis.return_to_after_pulled.lock() =
-                    Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
+                *stasis.return_to_after_pulled.lock() = Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
 
                 info!("Walking to {trapdoor_pos:?}...");
                 let goal = ReachBlockPosGoal {
@@ -119,10 +98,7 @@ pub async fn execute(
                 }
                 *stasis.pathfinding_requested_by.lock() = Some(sender.clone());
             } else {
-                send_command(
-                    bot,
-                    &format!("msg {sender} I'm not aware whether you have a pearl here. Sorry!"),
-                );
+                send_command(bot, &format!("msg {sender} I'm not aware whether you have a pearl here. Sorry!"));
             }
 
             Ok(true)
@@ -131,16 +107,12 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
 
-            let sender_entity = bot.entity_by::<With<Player>, (&GameProfileComponent,)>(
-                |(profile,): &(&GameProfileComponent,)| profile.name == sender,
-            );
+            let sender_entity = bot.entity_by::<With<Player>, (&GameProfileComponent,)>(|(profile,): &(&GameProfileComponent,)| profile.name == sender);
             if let Some(sender_entity) = sender_entity {
                 let position = bot.entity_component::<Position>(sender_entity);
                 let goal = BlockPosGoal(azalea::BlockPos {
@@ -153,32 +125,21 @@ pub async fn execute(
                 } else {
                     bot.goto(goal)
                 }
-                send_command(
-                    bot,
-                    &format!("msg {sender} Walking to your block position..."),
-                );
+                send_command(bot, &format!("msg {sender} Walking to your block position..."));
             } else {
-                send_command(
-                    bot,
-                    &format!("msg {sender} I could not find you in my render distance!"),
-                );
+                send_command(bot, &format!("msg {sender} I could not find you in my render distance!"));
             }
             Ok(true)
         }
         "admins" => {
-            send_command(
-                bot,
-                &format!("msg {sender} Admins: {}", OPTS.admin.join(", ")),
-            );
+            send_command(bot, &format!("msg {sender} Admins: {}", OPTS.admin.join(", ")));
             Ok(true)
         }
         "say" => {
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -197,9 +158,7 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -211,18 +170,14 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
             if !OPTS.enable_pos_command {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"
-                    ),
+                    &format!("msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"),
                 );
                 return Ok(true);
             }
@@ -231,10 +186,7 @@ pub async fn execute(
             let world_name = bot.component::<InstanceName>();
             send_command(
                 bot,
-                &format!(
-                    "msg {sender} I'm at {:.03} {:.03} {:.03} in {}",
-                    pos.x, pos.y, pos.z, world_name.path,
-                ),
+                &format!("msg {sender} I'm at {:.03} {:.03} {:.03} in {}", pos.x, pos.y, pos.z, world_name.path,),
             );
             Ok(true)
         }
@@ -243,18 +195,13 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
 
             if args.len() != 1 {
-                send_command(
-                    bot,
-                    &format!("msg {sender} Please specify hotbar index (0-8)."),
-                );
+                send_command(bot, &format!("msg {sender} Please specify hotbar index (0-8)."));
                 return Ok(true);
             }
 
@@ -270,9 +217,7 @@ pub async fn execute(
                 }
                 ecs.send_event(SendPacketEvent {
                     sent_by: bot.entity,
-                    packet: ServerboundGamePacket::SetCarriedItem(ServerboundSetCarriedItem {
-                        slot: index as u16,
-                    }),
+                    packet: ServerboundGamePacket::SetCarriedItem(ServerboundSetCarriedItem { slot: index as u16 }),
                 });
             }
 
@@ -284,9 +229,7 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -311,19 +254,17 @@ pub async fn execute(
                         let slot = arg.parse::<i16>()?;
                         ecs.send_event(SendPacketEvent {
                             sent_by: bot.entity,
-                            packet: ServerboundGamePacket::ContainerClick(
-                                ServerboundContainerClick {
-                                    container_id: 0,
-                                    state_id: 0,
+                            packet: ServerboundGamePacket::ContainerClick(ServerboundContainerClick {
+                                container_id: 0,
+                                state_id: 0,
 
-                                    slot_num: slot,
-                                    button_num: 1,
-                                    click_type: ClickType::Throw,
+                                slot_num: slot,
+                                button_num: 1,
+                                click_type: ClickType::Throw,
 
-                                    carried_item: ItemStack::Empty,
-                                    changed_slots: HashMap::default(),
-                                },
-                            ),
+                                carried_item: ItemStack::Empty,
+                                changed_slots: HashMap::default(),
+                            }),
                         });
                     }
                 }
@@ -336,9 +277,7 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -349,12 +288,7 @@ pub async fn execute(
                 .player_slots_range()
                 .chain(5..=8 /*Armor*/)
                 .chain(45..=45 /*Offhand*/)
-                .filter(|slot| {
-                    inv_menu
-                        .slot(*slot)
-                        .map(|stack| stack.is_present())
-                        .unwrap_or(false)
-                })
+                .filter(|slot| inv_menu.slot(*slot).map(|stack| stack.is_present()).unwrap_or(false))
                 .collect::<Vec<_>>();
             {
                 let mut ecs = bot.ecs.lock();
@@ -376,13 +310,7 @@ pub async fn execute(
                 }
             }
 
-            send_command(
-                bot,
-                &format!(
-                    "msg {sender} I dropped all my items ({} stacks)!",
-                    slots.len()
-                ),
-            );
+            send_command(bot, &format!("msg {sender} I dropped all my items ({} stacks)!", slots.len()));
             Ok(true)
         }
 
@@ -390,9 +318,7 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -407,10 +333,7 @@ pub async fn execute(
                 }),
             });
 
-            send_command(
-                bot,
-                &format!("msg {sender} Swapped main- and off-hand items!"),
-            );
+            send_command(bot, &format!("msg {sender} Swapped main- and off-hand items!"));
             Ok(true)
         }
 
@@ -418,9 +341,7 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -428,14 +349,8 @@ pub async fn execute(
             let inv = bot.entity_component::<Inventory>(bot.entity);
             let inv_menu = inv.inventory_menu;
             let mut slot_strings = Vec::new();
-            for slot in inv_menu
-                .player_slots_range()
-                .chain(5..=8 /*Armor*/)
-                .chain(45..=45 /*Offhand*/)
-            {
-                if let Some(item_stack_data) =
-                    inv_menu.slot(slot).and_then(|stack| stack.as_present())
-                {
+            for slot in inv_menu.player_slots_range().chain(5..=8 /*Armor*/).chain(45..=45 /*Offhand*/) {
+                if let Some(item_stack_data) = inv_menu.slot(slot).and_then(|stack| stack.as_present()) {
                     slot_strings.push(format!(
                         "{slot}: {}x {}",
                         item_stack_data.count,
@@ -444,14 +359,7 @@ pub async fn execute(
                 }
             }
 
-            send_command(
-                bot,
-                &format!(
-                    "msg {sender} Inv ({}): {}",
-                    slot_strings.len(),
-                    slot_strings.join(", "),
-                ),
-            );
+            send_command(bot, &format!("msg {sender} Inv ({}): {}", slot_strings.len(), slot_strings.join(", "),));
             Ok(true)
         }
 
@@ -459,9 +367,7 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -473,15 +379,11 @@ pub async fn execute(
             {
                 let mut ecs = bot.ecs.lock();
                 for slot in inv_menu.player_slots_range() {
-                    if let Some(item_stack_data) =
-                        inv_menu.slot(slot).and_then(|stack| stack.as_present())
-                    {
+                    if let Some(item_stack_data) = inv_menu.slot(slot).and_then(|stack| stack.as_present()) {
                         let item_name = item_stack_data.kind.to_string();
                         let target_slot: Option<usize> = if item_name.ends_with("_helmet") {
                             Some(5)
-                        } else if item_name.ends_with("_chestplate")
-                            || item_stack_data.kind == Item::Elytra
-                        {
+                        } else if item_name.ends_with("_chestplate") || item_stack_data.kind == Item::Elytra {
                             Some(6)
                         } else if item_name.ends_with("_leggings") {
                             Some(7)
@@ -492,27 +394,20 @@ pub async fn execute(
                         };
 
                         if let Some(target_slot) = target_slot {
-                            if !equipped_armor_slots.contains(&target_slot)
-                                && !inv_menu
-                                    .slot(target_slot)
-                                    .map(|stack| stack.is_present())
-                                    .unwrap_or(false)
-                            {
+                            if !equipped_armor_slots.contains(&target_slot) && !inv_menu.slot(target_slot).map(|stack| stack.is_present()).unwrap_or(false) {
                                 ecs.send_event(SendPacketEvent {
                                     sent_by: bot.entity,
-                                    packet: ServerboundGamePacket::ContainerClick(
-                                        ServerboundContainerClick {
-                                            container_id: 0,
-                                            state_id: 0,
+                                    packet: ServerboundGamePacket::ContainerClick(ServerboundContainerClick {
+                                        container_id: 0,
+                                        state_id: 0,
 
-                                            slot_num: slot as i16,
-                                            button_num: 0,
-                                            click_type: ClickType::QuickMove,
+                                        slot_num: slot as i16,
+                                        button_num: 0,
+                                        click_type: ClickType::QuickMove,
 
-                                            carried_item: ItemStack::Empty,
-                                            changed_slots: HashMap::default(),
-                                        },
-                                    ),
+                                        carried_item: ItemStack::Empty,
+                                        changed_slots: HashMap::default(),
+                                    }),
                                 });
                                 equipped_armor_slots.insert(target_slot);
                             }
@@ -521,13 +416,7 @@ pub async fn execute(
                 }
             }
 
-            send_command(
-                bot,
-                &format!(
-                    "msg {sender} Equipped {} armor pieces!",
-                    equipped_armor_slots.len(),
-                ),
-            );
+            send_command(bot, &format!("msg {sender} Equipped {} armor pieces!", equipped_armor_slots.len(),));
             Ok(true)
         }
 
@@ -535,9 +424,7 @@ pub async fn execute(
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!(
-                        "msg {sender} Sorry, but you need to be specified as an admin to use this command!"
-                    ),
+                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -549,36 +436,27 @@ pub async fn execute(
             {
                 let mut ecs = bot.ecs.lock();
                 for slot in 5..=8 {
-                    if inv_menu
-                        .slot(slot)
-                        .map(|stack| stack.is_present())
-                        .unwrap_or(false)
-                    {
+                    if inv_menu.slot(slot).map(|stack| stack.is_present()).unwrap_or(false) {
                         ecs.send_event(SendPacketEvent {
                             sent_by: bot.entity,
-                            packet: ServerboundGamePacket::ContainerClick(
-                                ServerboundContainerClick {
-                                    container_id: 0,
-                                    state_id: 0,
+                            packet: ServerboundGamePacket::ContainerClick(ServerboundContainerClick {
+                                container_id: 0,
+                                state_id: 0,
 
-                                    slot_num: slot as i16,
-                                    button_num: 0,
-                                    click_type: ClickType::QuickMove,
+                                slot_num: slot as i16,
+                                button_num: 0,
+                                click_type: ClickType::QuickMove,
 
-                                    carried_item: ItemStack::Empty,
-                                    changed_slots: HashMap::default(),
-                                },
-                            ),
+                                carried_item: ItemStack::Empty,
+                                changed_slots: HashMap::default(),
+                            }),
                         });
                         total += 1;
                     }
                 }
             }
 
-            send_command(
-                bot,
-                &format!("msg {sender} Unequipped {total} armor pieces!",),
-            );
+            send_command(bot, &format!("msg {sender} Unequipped {total} armor pieces!",));
             Ok(true)
         }
 
@@ -590,11 +468,7 @@ pub fn send_command(bot: &mut Client, command: &str) {
     if OPTS.quiet {
         info!("Quiet mode: Suppressed sending command: {command}");
     } else {
-        let truncated_command = if command.len() > 255 {
-            &command[..255]
-        } else {
-            command
-        };
+        let truncated_command = if command.len() > 255 { &command[..255] } else { command };
         info!(
             "Sending command{}: {command}",
             if command.len() != truncated_command.len() {
@@ -607,18 +481,12 @@ pub fn send_command(bot: &mut Client, command: &str) {
     }
 }
 
-pub async fn handle_devnet_message(
-    bot: &mut Client,
-    bot_state: &BotState,
-    message: devnet::Message,
-) -> anyhow::Result<()> {
+pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, message: devnet::Message) -> anyhow::Result<()> {
     let stasis = bot_state.stasis.as_ref();
     if stasis.is_none() {
         match message {
-            devnet::Message::CheckRequest { for_mc_id, .. }
-            | devnet::Message::PullRequest { for_mc_id, .. } => {
-                send_devnet_feedback(bot.username(), for_mc_id, true, "Stasis is not enabled!")
-                    .await?;
+            devnet::Message::CheckRequest { for_mc_id, .. } | devnet::Message::PullRequest { for_mc_id, .. } => {
+                send_devnet_feedback(bot.username(), for_mc_id, true, "Stasis is not enabled!").await?;
             }
             _ => {}
         }
@@ -627,10 +495,7 @@ pub async fn handle_devnet_message(
     let stasis = stasis.unwrap();
 
     match message {
-        devnet::Message::CheckRequest {
-            for_mc_id,
-            destination,
-        } => {
+        devnet::Message::CheckRequest { for_mc_id, destination } => {
             let sender = bot
                 .tab_list()
                 .iter()
@@ -647,24 +512,15 @@ pub async fn handle_devnet_message(
                 return Ok(());
             }
             let sender = sender.unwrap();
-            info!(
-                "Got devnet request to check pearl for {sender} ({for_mc_id}) at destination {destination}"
-            );
+            info!("Got devnet request to check pearl for {sender} ({for_mc_id}) at destination {destination}");
 
-            let has_trapdoor = stasis
-                .remembered_trapdoor_positions
-                .lock()
-                .contains_key(&sender);
+            let has_trapdoor = stasis.remembered_trapdoor_positions.lock().contains_key(&sender);
             let devnet_tx = DEVNET_TX.lock().clone();
             if let Some(devnet_tx) = devnet_tx {
                 devnet_tx
                     .send(devnet::Message::CheckResponse {
                         for_mc_id,
-                        pearls: if has_trapdoor {
-                            vec![serde_json::json!({})]
-                        } else {
-                            vec![]
-                        },
+                        pearls: if has_trapdoor { vec![serde_json::json!({})] } else { vec![] },
                     })
                     .await?;
             }
@@ -691,15 +547,9 @@ pub async fn handle_devnet_message(
                 return Ok(());
             }
             let sender = sender.unwrap();
-            info!(
-                "Got devnet request to pull pearl {pearl_index} for {sender} ({for_mc_id}) at destination {destination}"
-            );
+            info!("Got devnet request to pull pearl {pearl_index} for {sender} ({for_mc_id}) at destination {destination}");
 
-            let trapdoor_pos = stasis
-                .remembered_trapdoor_positions
-                .lock()
-                .get(&sender)
-                .cloned();
+            let trapdoor_pos = stasis.remembered_trapdoor_positions.lock().get(&sender).cloned();
             if let Some(trapdoor_pos) = trapdoor_pos {
                 if stasis.pathfinding_requested_by.lock().is_some() {
                     send_devnet_feedback(
@@ -712,16 +562,9 @@ pub async fn handle_devnet_message(
                     return Ok(());
                 }
 
-                send_devnet_feedback(
-                    bot.username(),
-                    for_mc_id,
-                    false,
-                    "Walking to your stasis chamber...",
-                )
-                .await?;
+                send_devnet_feedback(bot.username(), for_mc_id, false, "Walking to your stasis chamber...").await?;
 
-                *stasis.return_to_after_pulled.lock() =
-                    Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
+                *stasis.return_to_after_pulled.lock() = Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
 
                 info!("Walking to {trapdoor_pos:?}...");
                 let goal = ReachBlockPosGoal {
@@ -735,13 +578,7 @@ pub async fn handle_devnet_message(
                 }
                 *stasis.pathfinding_requested_by.lock() = Some(sender.clone());
             } else {
-                send_devnet_feedback(
-                    bot.username(),
-                    for_mc_id,
-                    true,
-                    "I'm not aware whether you have a pearl here. Sorry!",
-                )
-                .await?;
+                send_devnet_feedback(bot.username(), for_mc_id, true, "I'm not aware whether you have a pearl here. Sorry!").await?;
             }
         }
         _ => {}
@@ -749,12 +586,7 @@ pub async fn handle_devnet_message(
     Ok(())
 }
 
-pub async fn send_devnet_feedback(
-    own_username: impl AsRef<str>,
-    for_mc_id: Uuid,
-    error: bool,
-    message: impl AsRef<str>,
-) -> anyhow::Result<()> {
+pub async fn send_devnet_feedback(own_username: impl AsRef<str>, for_mc_id: Uuid, error: bool, message: impl AsRef<str>) -> anyhow::Result<()> {
     let devnet_tx = DEVNET_TX.lock().clone();
     if let Some(devnet_tx) = devnet_tx {
         devnet_tx

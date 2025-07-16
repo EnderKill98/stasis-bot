@@ -34,12 +34,7 @@ impl Module for PeriodicSwingModule {
         "PeriodicSwing"
     }
 
-    async fn handle(
-        &self,
-        bot: Client,
-        event: &Event,
-        _bot_state: &BotState,
-    ) -> anyhow::Result<()> {
+    async fn handle(&self, bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Tick => {
                 // 2b2t Anti AFK
