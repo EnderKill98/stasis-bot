@@ -22,11 +22,11 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
         command.remove(0);
     }
     command = command.to_lowercase();
-    let sender_is_admin = OPTS.admin.iter().any(|a| sender.eq_ignore_ascii_case(a));
+    let sender_is_admin = OPTS.admin.iter().any(|a| sender.eq_ignore_ascii_case(a) || a == "*");
 
     match command.as_str() {
         "help" => {
-            let mut commands = vec!["!help", "!about"];
+            let mut commands = vec!["!help", "!about", "!modules"];
             if bot_state.stasis.is_some() {
                 commands.push("!tp");
             }
@@ -63,6 +63,15 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                     env!("CARGO_PKG_VERSION")
                 ),
             );
+            Ok(true)
+        }
+        "modules" => {
+            let mut module_names = vec![];
+            for module in bot_state.modules() {
+                module_names.push(module.name().to_string());
+            }
+
+            send_command(bot, &format!("msg {sender} Active modules: {}", module_names.join(", "),));
             Ok(true)
         }
         "tp" => {
