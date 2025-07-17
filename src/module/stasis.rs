@@ -1,13 +1,18 @@
 use crate::module::Module;
+use crate::task::delay_ticks::DelayTicksTask;
+use crate::task::group::TaskGroup;
+use crate::task::oncefunc::OnceFuncTask;
+use crate::task::pathfind;
+use crate::task::pathfind::PathfindTask;
 use crate::{BotState, OPTS};
 use anyhow::Context;
 use azalea::blocks::Block;
 use azalea::core::direction::Direction;
 use azalea::ecs::prelude::With;
+use azalea::entity::Position;
 use azalea::entity::metadata::Player;
 use azalea::packet::game::SendPacketEvent;
-use azalea::pathfinder::goals::BlockPosGoal;
-use azalea::pathfinder::{Pathfinder, PathfinderClientExt};
+use azalea::pathfinder::goals::{BlockPosGoal, ReachBlockPosGoal};
 use azalea::protocol::packets::game::s_interact::InteractionHand;
 use azalea::protocol::packets::game::s_use_item_on::BlockHit;
 use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundGamePacket, ServerboundUseItemOn};
@@ -19,14 +24,24 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct StasisModule {
+    pub do_reopen_trapdoor: bool,
+
     pub remembered_trapdoor_positions: Arc<Mutex<HashMap<String, BlockPos>>>,
-    pub pathfinding_requested_by: Arc<Mutex<Option<String>>>,
-    pub return_to_after_pulled: Arc<Mutex<Option<azalea::Vec3>>>,
+    pub last_idle_pos: Arc<Mutex<Option<BlockPos>>>,
 }
 
 impl StasisModule {
+    pub fn new(do_reopen_trapdoor: bool) -> Self {
+        Self {
+            do_reopen_trapdoor,
+
+            remembered_trapdoor_positions: Default::default(),
+            last_idle_pos: Default::default(),
+        }
+    }
+
     pub fn remembered_trapdoor_positions_path() -> PathBuf {
         PathBuf::from("remembered-trapdoor-positions.json")
     }
@@ -60,6 +75,131 @@ impl StasisModule {
             .context("Save remembered_trapdoor_positions as file")?;
         Ok(())
     }
+
+    pub fn recommended_closed_trapdoor_ticks(bot_state: &BotState) -> u32 {
+        if let Some(server_tps) = &bot_state.server_tps {
+            // These values worked well with fabric Based Bot (PearlButler on Simpcraft)
+            let tps = server_tps.current_tps().unwrap_or(20.0);
+            let mut tick_delay = 12;
+            if server_tps.is_server_likely_hanging() {
+                tick_delay += 60;
+            }
+            if tps <= 15.0 {
+                tick_delay += 5;
+            }
+            if tps <= 10.0 {
+                tick_delay += 10;
+            }
+            if tps <= 5.0 {
+                tick_delay += 10;
+            }
+            tick_delay
+        } else {
+            30
+        }
+    }
+
+    fn current_block_pos(bot: &mut Client) -> BlockPos {
+        let pos = bot.entity_component::<Position>(bot.entity);
+        BlockPos {
+            x: pos.x.floor() as i32,
+            y: pos.y.floor() as i32,
+            z: pos.z.floor() as i32,
+        }
+    }
+
+    pub fn return_pos(&self, bot: &mut Client) -> BlockPos {
+        if let Some(last_idle_pos) = self.last_idle_pos.lock().as_ref() {
+            last_idle_pos.clone()
+        } else {
+            Self::current_block_pos(bot)
+        }
+    }
+
+    pub fn clear_idle_pos(&self, reason: impl AsRef<str>) {
+        *self.last_idle_pos.lock() = None;
+        debug!("Cleared idle pos: {}", reason.as_ref());
+    }
+
+    pub fn update_idle_pos(&self, bot: &mut Client) {
+        *self.last_idle_pos.lock() = Some(Self::current_block_pos(bot));
+    }
+
+    pub fn pull_pearl<F: Fn(/*error*/ bool, &str) + Send + Sync + 'static>(
+        &self,
+        username: &str,
+        bot: &Client,
+        bot_state: &BotState,
+        feedback: F,
+    ) -> anyhow::Result<()> {
+        let username = username.to_owned();
+        let remembered_trapdoor_positions = self.remembered_trapdoor_positions.lock();
+        let trapdoor_pos = remembered_trapdoor_positions.get(&username);
+        if trapdoor_pos.is_none() {
+            feedback(true, "I'm not aware whether you have a pearl here. Sorry!");
+            return Ok(());
+        }
+        let trapdoor_pos = trapdoor_pos.unwrap();
+
+        if bot_state.tasks() > 0 {
+            feedback(false, "Hang on, will walk to your pearl in due time...");
+        } else {
+            feedback(false, "Walking to your pearl...");
+        }
+        info!("Walking to {trapdoor_pos:?}...");
+
+        let trapdoor_goal = ReachBlockPosGoal {
+            pos: trapdoor_pos.to_owned(),
+            chunk_storage: bot.world().read().chunks.clone(),
+        };
+        let return_goal = BlockPosGoal(self.return_pos(&mut bot.clone()));
+
+        let greeting = format!("Welcome back, {username}!");
+
+        let interact_event = SendPacketEvent {
+            sent_by: bot.entity,
+            packet: ServerboundGamePacket::UseItemOn(ServerboundUseItemOn {
+                block_hit: BlockHit {
+                    block_pos: trapdoor_pos.clone(),
+                    direction: Direction::Down,
+                    location: Vec3 {
+                        x: trapdoor_pos.x as f64 + 0.5,
+                        y: trapdoor_pos.y as f64 + 0.5,
+                        z: trapdoor_pos.z as f64 + 0.5,
+                    },
+                    inside: true,
+                    world_border: false,
+                },
+                hand: InteractionHand::MainHand,
+                sequence: 0,
+            }),
+        };
+
+        let interact_event_clone = interact_event.clone();
+        let do_reopen_trapdoor = self.do_reopen_trapdoor;
+        let username_clone = username.to_owned();
+
+        let remembered_trapdoor_positions = self.remembered_trapdoor_positions.clone();
+        bot_state.add_task(
+            TaskGroup::new(format!("Pull {username}'s Pearl"))
+                .with(PathfindTask::new(!OPTS.no_mining, trapdoor_goal, format!("near {username}'s Pearl")))
+                .with(OnceFuncTask::new(format!("Close {username}'s Trapdoor and Greet"), move |bot, _bot_state| {
+                    bot.ecs.lock().send_event(interact_event);
+                    remembered_trapdoor_positions.lock().remove(&username_clone);
+                    feedback(false, &greeting);
+                    Ok(())
+                }))
+                .with(DelayTicksTask::new(Self::recommended_closed_trapdoor_ticks(bot_state)))
+                .with(OnceFuncTask::new(format!("Re-Open {username}'s Trapdoor"), move |bot, _bot_state| {
+                    if do_reopen_trapdoor {
+                        bot.ecs.lock().send_event(interact_event_clone);
+                    }
+                    Ok(())
+                }))
+                .with(PathfindTask::new(!OPTS.no_mining, return_goal, "old spot")),
+        );
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -68,13 +208,20 @@ impl Module for StasisModule {
         "Stasis"
     }
 
-    async fn handle(&self, bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
+    async fn handle(&self, bot: Client, event: &Event, bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Login => {
                 info!("Loading remembered trapdoor positions...");
                 self.load_stasis().await?;
+                self.clear_idle_pos("Login-Event")
+            }
+            Event::Disconnect(_) => {
+                self.clear_idle_pos("Disconnect-Event");
             }
             Event::Packet(packet) => match packet.as_ref() {
+                ClientboundGamePacket::PlayerPosition(_) => {
+                    self.clear_idle_pos("Got teleport-Packet");
+                }
                 ClientboundGamePacket::AddEntity(packet) => {
                     if packet.entity_type == EntityKind::EnderPearl {
                         let owning_player_entity_id = packet.data as i32;
@@ -144,61 +291,8 @@ impl Module for StasisModule {
                 _ => {}
             },
             Event::Tick => {
-                let mut pathfinding_requested_by = self.pathfinding_requested_by.lock();
-                if let Some(ref requesting_player) = *pathfinding_requested_by {
-                    let mut ecs = bot.ecs.lock();
-                    let pathfinder: &Pathfinder = ecs.query::<&Pathfinder>().get_mut(&mut *ecs, bot.entity).unwrap();
-
-                    if !pathfinder.is_calculating && pathfinder.goal.is_none() {
-                        drop(ecs);
-
-                        if let Some(trapdoor_pos) = self.remembered_trapdoor_positions.lock().remove(requesting_player) {
-                            if !OPTS.quiet {
-                                bot.send_command_packet(&format!("msg {requesting_player} Welcome back, {requesting_player}!"));
-                            }
-                            bot.ecs.lock().send_event(SendPacketEvent {
-                                sent_by: bot.entity,
-                                packet: ServerboundGamePacket::UseItemOn(ServerboundUseItemOn {
-                                    block_hit: BlockHit {
-                                        block_pos: azalea::BlockPos::from(trapdoor_pos),
-                                        direction: Direction::Down,
-                                        location: Vec3 {
-                                            x: trapdoor_pos.x as f64 + 0.5,
-                                            y: trapdoor_pos.y as f64 + 0.5,
-                                            z: trapdoor_pos.z as f64 + 0.5,
-                                        },
-                                        inside: true,
-                                        world_border: false,
-                                    },
-                                    hand: InteractionHand::MainHand,
-                                    sequence: 0,
-                                }),
-                            });
-
-                            *pathfinding_requested_by = None;
-                            if let Some(return_to_after_pulled) = self.return_to_after_pulled.lock().take() {
-                                info!("Returning to {return_to_after_pulled}...");
-                                let goal = BlockPosGoal(BlockPos {
-                                    x: return_to_after_pulled.x.floor() as i32,
-                                    y: return_to_after_pulled.y.floor() as i32,
-                                    z: return_to_after_pulled.z.floor() as i32,
-                                });
-                                if OPTS.no_mining {
-                                    bot.goto_without_mining(goal);
-                                } else {
-                                    bot.goto(goal);
-                                }
-                            }
-
-                            let self_clone = self.clone();
-                            tokio::spawn(async move {
-                                match self_clone.save_stasis().await {
-                                    Ok(_) => info!("Saved remembered trapdoor positions to file."),
-                                    Err(err) => error!("Failed to save remembered trapdoor positions to file: {err:?}"),
-                                }
-                            });
-                        }
-                    }
+                if bot_state.tasks() == 0 && pathfind::is_pathfinding(&bot) {
+                    self.update_idle_pos(&mut bot.clone());
                 }
             }
             _ => {}

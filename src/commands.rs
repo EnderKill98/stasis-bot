@@ -1,4 +1,9 @@
+use crate::task::Task;
+use crate::task::eat::EatTask;
+use crate::task::group::TaskGroup;
+use crate::task::pathfind::PathfindTask;
 use crate::{BotState, DEVNET_TX, OPTS, devnet};
+use anyhow::Context;
 use azalea::core::direction::Direction;
 use azalea::inventory::operations::ClickType;
 use azalea::inventory::{Inventory, ItemStack, SetSelectedHotbarSlotEvent};
@@ -7,10 +12,10 @@ use azalea::protocol::packets::game::s_player_action::Action;
 use azalea::protocol::packets::game::{ServerboundContainerClick, ServerboundGamePacket, ServerboundPlayerAction, ServerboundSetCarriedItem};
 use azalea::registry::Item;
 use azalea::{
-    BlockPos, GameProfileComponent, Vec3,
+    BlockPos, GameProfileComponent,
     ecs::query::With,
     entity::{Position, metadata::Player},
-    pathfinder::goals::{BlockPosGoal, ReachBlockPosGoal},
+    pathfinder::goals::BlockPosGoal,
     prelude::*,
     world::InstanceName,
 };
@@ -30,6 +35,9 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if bot_state.stasis.is_some() {
                 commands.push("!tp");
             }
+            if bot_state.server_tps.is_some() {
+                commands.push("!tps");
+            }
             if sender_is_admin {
                 commands.append(&mut vec![
                     "!comehere",
@@ -42,6 +50,9 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                     "!printinv",
                     "!equip",
                     "!unequip",
+                    "!canceltasks",
+                    "!task",
+                    "!eat",
                 ]);
                 if OPTS.enable_pos_command {
                     commands.push("!pos");
@@ -52,13 +63,13 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             }
             commands.sort();
 
-            send_command(bot, &format!("msg {sender} Commands: {}", commands.join(", ")));
+            send_command(bot, format!("msg {sender} Commands: {}", commands.join(", ")));
             Ok(true)
         }
         "about" => {
             send_command(
                 bot,
-                &format!(
+                format!(
                     "msg {sender} Hi, I'm running EnderKill98's azalea-based stasis-bot {}: github.com/EnderKill98/stasis-bot",
                     env!("CARGO_PKG_VERSION")
                 ),
@@ -71,84 +82,57 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 module_names.push(module.name().to_string());
             }
 
-            send_command(bot, &format!("msg {sender} Active modules: {}", module_names.join(", "),));
+            send_command(bot, format!("msg {sender} Active modules: {}", module_names.join(", "),));
             Ok(true)
         }
         "tp" => {
             let stasis = bot_state.stasis.as_ref();
             if stasis.is_none() {
-                send_command(bot, &format!("msg {sender} I'm not allowed to do pearl duties :(..."));
+                send_command(bot, format!("msg {sender} I'm not allowed to do pearl duties :(..."));
                 return Ok(true);
             }
             let stasis = stasis.unwrap();
-            let remembered_trapdoor_positions = stasis.remembered_trapdoor_positions.lock();
-
-            if let Some(trapdoor_pos) = remembered_trapdoor_positions.get(&sender) {
-                if stasis.pathfinding_requested_by.lock().is_some() {
-                    send_command(
-                        bot,
-                        &format!("msg {sender} Please ask again in a bit. I'm currently already going somewhere..."),
-                    );
-                    return Ok(true);
-                }
-                send_command(bot, &format!("msg {sender} Walking to your stasis chamber..."));
-
-                *stasis.return_to_after_pulled.lock() = Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
-
-                info!("Walking to {trapdoor_pos:?}...");
-                let goal = ReachBlockPosGoal {
-                    pos: azalea::BlockPos::from(*trapdoor_pos),
-                    chunk_storage: bot.world().read().chunks.clone(),
-                };
-                if OPTS.no_mining {
-                    bot.goto_without_mining(goal);
-                } else {
-                    bot.goto(goal);
-                }
-                *stasis.pathfinding_requested_by.lock() = Some(sender.clone());
-            } else {
-                send_command(bot, &format!("msg {sender} I'm not aware whether you have a pearl here. Sorry!"));
-            }
-
+            let bot = bot.clone();
+            stasis
+                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, move |_error, message| {
+                    send_command(&mut bot.clone(), format!("msg {sender} {message}"));
+                })
+                .context("Pull pearl")?;
             Ok(true)
         }
         "comehere" => {
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
 
             let sender_entity = bot.entity_by::<With<Player>, (&GameProfileComponent,)>(|(profile,): &(&GameProfileComponent,)| profile.name == sender);
             if let Some(sender_entity) = sender_entity {
-                let position = bot.entity_component::<Position>(sender_entity);
-                let goal = BlockPosGoal(azalea::BlockPos {
-                    x: position.x.floor() as i32,
-                    y: position.y.floor() as i32,
-                    z: position.z.floor() as i32,
-                });
-                if OPTS.no_mining {
-                    bot.goto_without_mining(goal);
+                let goal = BlockPosGoal(bot.entity_component::<Position>(sender_entity).to_block_pos_floor());
+                let tasks = bot_state.tasks();
+                bot_state.add_task(PathfindTask::new(!OPTS.no_mining, goal, format!("{sender}'s BlockPos")));
+                if tasks > 0 {
+                    send_command(bot, format!("msg {sender} Hang on. Walking to your block position in due time..."));
                 } else {
-                    bot.goto(goal)
+                    send_command(bot, format!("msg {sender} Walking to your block position..."));
                 }
-                send_command(bot, &format!("msg {sender} Walking to your block position..."));
             } else {
-                send_command(bot, &format!("msg {sender} I could not find you in my render distance!"));
+                send_command(bot, format!("msg {sender} I could not find you in my render distance!"));
             }
             Ok(true)
         }
         "admins" => {
-            send_command(bot, &format!("msg {sender} Admins: {}", OPTS.admin.join(", ")));
+            send_command(bot, format!("msg {sender} Admins: {}", OPTS.admin.join(", ")));
             Ok(true)
         }
         "say" => {
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -167,7 +151,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -179,14 +163,14 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
             if !OPTS.enable_pos_command {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"),
+                    format!("msg {sender} Sorry, but this command was not enabled. The owner needs to add the flag --enable-pos-command in order to do so!"),
                 );
                 return Ok(true);
             }
@@ -195,8 +179,73 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             let world_name = bot.component::<InstanceName>();
             send_command(
                 bot,
-                &format!("msg {sender} I'm at {:.03} {:.03} {:.03} in {}", pos.x, pos.y, pos.z, world_name.path,),
+                format!("msg {sender} I'm at {:.03} {:.03} {:.03} in {}", pos.x, pos.y, pos.z, world_name.path,),
             );
+            Ok(true)
+        }
+
+        "tps" => {
+            if let Some(server_tps) = &bot_state.server_tps {
+                if server_tps.is_server_likely_hanging() {
+                    send_command(bot, format!("msg {sender} Seems that the server is currently hanging..."));
+                } else if let Some(tps) = server_tps.current_tps() {
+                    send_command(bot, format!("msg {sender} Current TPS: {tps:.02}"));
+                } else {
+                    send_command(bot, format!("msg {sender} I don't know the TPS, yet!"));
+                }
+            } else {
+                send_command(bot, format!("msg {sender} Sorry, but ServerTps is not active!"));
+            }
+            Ok(true)
+        }
+
+        "task" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+
+            send_command(bot, format!("msg {sender} Task: {}", bot_state.root_task_group.lock()));
+            Ok(true)
+        }
+
+        "canceltasks" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+
+            let tasks = bot_state.tasks();
+            if let Err(err) = bot_state.root_task_group.lock().stop(bot.clone(), &bot_state) {
+                error!("Failed to stop root task group: {err:?}");
+                send_command(bot, format!("msg {sender} Failed: {err:?}"));
+            };
+            *bot_state.root_task_group.lock() = TaskGroup::new_root();
+            send_command(bot, format!("msg {sender} Stopped and removed all tasks ({tasks})!"));
+            Ok(true)
+        }
+
+        "eat" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+
+            if EatTask::find_food_in_hotbar(bot).is_none() {
+                send_command(bot, format!("msg {sender} No food found in hotbar!"));
+                return Ok(true);
+            }
+            bot_state.add_task_now(bot.clone(), bot_state, EatTask::default()).context("Add EatTask now")?;
+            send_command(bot, format!("msg {sender} Attempting to eat now..."));
             Ok(true)
         }
 
@@ -204,13 +253,13 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
 
             if args.len() != 1 {
-                send_command(bot, &format!("msg {sender} Please specify hotbar index (0-8)."));
+                send_command(bot, format!("msg {sender} Please specify hotbar index (0-8)."));
                 return Ok(true);
             }
 
@@ -230,7 +279,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 });
             }
 
-            send_command(bot, &format!("msg {sender} Selected index {index}!"));
+            send_command(bot, format!("msg {sender} Selected index {index}!"));
             Ok(true)
         }
 
@@ -238,7 +287,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -255,7 +304,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                     }),
                 });
 
-                send_command(bot, &format!("msg {sender} I dropped the item in my hand!"));
+                send_command(bot, format!("msg {sender} I dropped the item in my hand!"));
             } else {
                 {
                     let mut ecs = bot.ecs.lock();
@@ -277,7 +326,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                         });
                     }
                 }
-                send_command(bot, &format!("msg {sender} Dropped specified indices!"));
+                send_command(bot, format!("msg {sender} Dropped specified indices!"));
             }
             Ok(true)
         }
@@ -286,7 +335,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -319,7 +368,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 }
             }
 
-            send_command(bot, &format!("msg {sender} I dropped all my items ({} stacks)!", slots.len()));
+            send_command(bot, format!("msg {sender} I dropped all my items ({} stacks)!", slots.len()));
             Ok(true)
         }
 
@@ -327,7 +376,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -342,7 +391,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 }),
             });
 
-            send_command(bot, &format!("msg {sender} Swapped main- and off-hand items!"));
+            send_command(bot, format!("msg {sender} Swapped main- and off-hand items!"));
             Ok(true)
         }
 
@@ -350,7 +399,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -368,7 +417,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 }
             }
 
-            send_command(bot, &format!("msg {sender} Inv ({}): {}", slot_strings.len(), slot_strings.join(", "),));
+            send_command(bot, format!("msg {sender} Inv ({}): {}", slot_strings.len(), slot_strings.join(", "),));
             Ok(true)
         }
 
@@ -376,7 +425,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -425,7 +474,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 }
             }
 
-            send_command(bot, &format!("msg {sender} Equipped {} armor pieces!", equipped_armor_slots.len(),));
+            send_command(bot, format!("msg {sender} Equipped {} armor pieces!", equipped_armor_slots.len(),));
             Ok(true)
         }
 
@@ -433,7 +482,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if !sender_is_admin {
                 send_command(
                     bot,
-                    &format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
                 );
                 return Ok(true);
             }
@@ -465,7 +514,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 }
             }
 
-            send_command(bot, &format!("msg {sender} Unequipped {total} armor pieces!",));
+            send_command(bot, format!("msg {sender} Unequipped {total} armor pieces!",));
             Ok(true)
         }
 
@@ -473,7 +522,8 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
     }
 }
 
-pub fn send_command(bot: &mut Client, command: &str) {
+pub fn send_command(bot: &mut Client, command: impl AsRef<str>) {
+    let command = command.as_ref();
     if OPTS.quiet {
         info!("Quiet mode: Suppressed sending command: {command}");
     } else {
@@ -484,7 +534,7 @@ pub fn send_command(bot: &mut Client, command: &str) {
                 " (truncated to 255 chars!)"
             } else {
                 ""
-            }
+            },
         );
         bot.send_command_packet(truncated_command);
     }
@@ -495,7 +545,7 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
     if stasis.is_none() {
         match message {
             devnet::Message::CheckRequest { for_mc_id, .. } | devnet::Message::PullRequest { for_mc_id, .. } => {
-                send_devnet_feedback(bot.username(), for_mc_id, true, "Stasis is not enabled!").await?;
+                send_devnet_feedback(bot.username(), for_mc_id, true, "Stasis is not enabled!");
             }
             _ => {}
         }
@@ -516,8 +566,7 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
                     for_mc_id,
                     true,
                     "You need to be online for me to know your username and check your pearl!",
-                )
-                .await?;
+                );
                 return Ok(());
             }
             let sender = sender.unwrap();
@@ -551,61 +600,44 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
                     for_mc_id,
                     true,
                     "You need to be online for me to know your username and pull your pearl!",
-                )
-                .await?;
+                );
                 return Ok(());
             }
             let sender = sender.unwrap();
             info!("Got devnet request to pull pearl {pearl_index} for {sender} ({for_mc_id}) at destination {destination}");
 
-            let trapdoor_pos = stasis.remembered_trapdoor_positions.lock().get(&sender).cloned();
-            if let Some(trapdoor_pos) = trapdoor_pos {
-                if stasis.pathfinding_requested_by.lock().is_some() {
-                    send_devnet_feedback(
-                        bot.username(),
-                        for_mc_id,
-                        true,
-                        "Please ask again in a bit. I'm currently already going somewhere...",
-                    )
-                    .await?;
-                    return Ok(());
-                }
-
-                send_devnet_feedback(bot.username(), for_mc_id, false, "Walking to your stasis chamber...").await?;
-
-                *stasis.return_to_after_pulled.lock() = Some(Vec3::from(&bot.entity_component::<Position>(bot.entity)));
-
-                info!("Walking to {trapdoor_pos:?}...");
-                let goal = ReachBlockPosGoal {
-                    pos: azalea::BlockPos::from(trapdoor_pos),
-                    chunk_storage: bot.world().read().chunks.clone(),
-                };
-                if OPTS.no_mining {
-                    bot.goto_without_mining(goal);
-                } else {
-                    bot.goto(goal);
-                }
-                *stasis.pathfinding_requested_by.lock() = Some(sender.clone());
-            } else {
-                send_devnet_feedback(bot.username(), for_mc_id, true, "I'm not aware whether you have a pearl here. Sorry!").await?;
-            }
+            let own_username = bot.username();
+            let bot = bot.clone();
+            stasis
+                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, move |error, message| {
+                    send_devnet_feedback(&own_username, for_mc_id, error, message)
+                })
+                .context("Pull pearl")?;
         }
         _ => {}
     }
     Ok(())
 }
 
-pub async fn send_devnet_feedback(own_username: impl AsRef<str>, for_mc_id: Uuid, error: bool, message: impl AsRef<str>) -> anyhow::Result<()> {
+pub fn send_devnet_feedback(own_username: impl AsRef<str>, for_mc_id: Uuid, error: bool, message: impl AsRef<str>) {
+    info!("FEEDBACK: {}", message.as_ref());
     let devnet_tx = DEVNET_TX.lock().clone();
     if let Some(devnet_tx) = devnet_tx {
-        devnet_tx
-            .send(devnet::Message::BotFeedback {
-                error,
-                sender: own_username.as_ref().to_owned(),
-                message: message.as_ref().to_owned(),
-                for_player: for_mc_id,
-            })
-            .await?;
+        let message = message.as_ref().to_string();
+        let own_username = own_username.as_ref().to_string();
+        tokio::spawn(async move {
+            if let Err(err) = devnet_tx
+                .send(devnet::Message::BotFeedback {
+                    error,
+                    sender: own_username,
+                    message,
+                    for_player: for_mc_id,
+                })
+                .await
+            {
+                error!("Failed to send devnet bot_feedback: {err:?}");
+            }
+        });
     }
-    Ok(())
+    info!("FEEDBACK2: {}", message.as_ref());
 }

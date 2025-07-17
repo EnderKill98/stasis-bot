@@ -6,6 +6,7 @@ pub mod devnet_handler;
 pub mod emergency_quit;
 pub mod look_at_players;
 pub mod periodic_swing;
+pub mod server_tps;
 pub mod soundness;
 pub mod stasis;
 pub mod visual_range;

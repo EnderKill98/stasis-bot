@@ -1,8 +1,8 @@
 use crate::BotState;
 use crate::module::Module;
+use crate::task::pathfind;
 use azalea::entity::metadata::Player;
 use azalea::entity::{EyeHeight, Pose, Position};
-use azalea::pathfinder::Pathfinder;
 use azalea::world::MinecraftEntityId;
 use azalea::{BotClientExt, Client, Event, Vec3};
 
@@ -23,20 +23,14 @@ impl Module for LookAtPlayersModule {
         "LookAtPlayers"
     }
 
-    async fn handle(&self, mut bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
+    async fn handle(&self, mut bot: Client, event: &Event, bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Tick => {
                 // Look at players
-                let is_pathfinding = {
-                    let mut ecs = bot.ecs.lock();
-                    let pathfinder: &Pathfinder = ecs.query::<&Pathfinder>().get_mut(&mut *ecs, bot.entity).unwrap();
-                    pathfinder.goal.is_some()
-                };
-
-                if !is_pathfinding {
+                if !pathfind::is_pathfinding(&bot) && bot_state.tasks() == 0 {
                     let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
                     let my_pos = bot.entity_component::<Position>(bot.entity);
-                    let my_eye_height = *bot.entity_component::<EyeHeight>(bot.entity) as f64;
+                    let my_eye_height = f64::from(bot.entity_component::<EyeHeight>(bot.entity));
                     let my_eye_pos = *my_pos + Vec3::new(0f64, my_eye_height, 0f64);
 
                     let mut closest_eye_pos = None;

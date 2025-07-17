@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod devnet;
 pub mod module;
+pub mod task;
 
 #[macro_use]
 extern crate tracing;
@@ -11,9 +12,12 @@ use crate::module::devnet_handler::DevNetIntegrationModule;
 use crate::module::emergency_quit::EmergencyQuitModule;
 use crate::module::look_at_players::LookAtPlayersModule;
 use crate::module::periodic_swing::PeriodicSwingModule;
+use crate::module::server_tps::ServerTps;
 use crate::module::soundness::SoundnessModule;
 use crate::module::stasis::StasisModule;
 use crate::module::visual_range::VisualRangeModule;
+use crate::task::group::TaskGroup;
+use crate::task::{Task, TaskOutcome};
 use anyhow::{Context, Result};
 use azalea::app::PluginGroup;
 use azalea::swarm::DefaultSwarmPlugins;
@@ -22,7 +26,6 @@ use azalea::{
     DefaultBotPlugins, DefaultPlugins, JoinOpts,
     auth::AuthResult,
     prelude::*,
-    registry::Item,
     swarm::{Swarm, SwarmEvent},
 };
 use bevy_log::LogPlugin;
@@ -44,6 +47,7 @@ pub const EXITCODE_OTHER: i32 = 1; // Due to errors returned and propagated to m
 pub const EXITCODE_CONFLICTING_CLI_OPTS: i32 = 2;
 pub const EXITCODE_AUTH_FAILED: i32 = 3;
 pub const EXITCODE_NO_ACCESS_TOKEN: i32 = 4;
+pub const EXITCODE_PATHFINDER_DEADLOCKED: i32 = 5;
 
 pub const EXITCODE_USER_REQUESTED_STOP: i32 = 20; // Using an error code to prevent automatic relaunching in some configurations or scripts
 pub const EXITCODE_LOW_HEALTH_OR_TOTEM_POP: i32 = 69;
@@ -138,43 +142,11 @@ struct Opts {
     /// Token to access devnet API (as destination)
     #[clap(long)]
     devnet_access_token: Option<String>,
-}
 
-pub const FOOD_ITEMS: &[Item] = &[
-    Item::Apple,
-    Item::GoldenApple,
-    Item::EnchantedGoldenApple,
-    Item::Carrot,
-    Item::GoldenCarrot,
-    Item::MelonSlice,
-    Item::SweetBerries,
-    Item::GlowBerries,
-    Item::Potato,
-    Item::BakedPotato,
-    Item::Beetroot,
-    Item::DriedKelp,
-    Item::Beef,
-    Item::CookedBeef,
-    Item::Porkchop,
-    Item::CookedPorkchop,
-    Item::Mutton,
-    Item::CookedMutton,
-    Item::Chicken,
-    Item::CookedChicken,
-    Item::Rabbit,
-    Item::CookedRabbit,
-    Item::Cod,
-    Item::CookedCod,
-    Item::Salmon,
-    Item::CookedSalmon,
-    Item::TropicalFish,
-    Item::Bread,
-    Item::Cookie,
-    Item::PumpkinPie,
-    Item::MushroomStew,
-    Item::BeetrootSoup,
-    Item::RabbitStew,
-];
+    /// Don't re-open trapdoor after teleport. Use if teleports fail or you're paranoid.
+    #[clap(long)]
+    no_trapdoor_reopen: bool,
+}
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
 static INPUTLINE_QUEUE: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
@@ -410,6 +382,8 @@ async fn auth() -> Result<AuthResult> {
 #[derive(Clone, Component)]
 pub struct BotState {
     last_dm_handled_at: Arc<Mutex<Option<Instant>>>,
+    root_task_group: Arc<Mutex<TaskGroup>>,
+    root_task_last_display: Arc<Mutex<String>>,
 
     auto_eat: Option<AutoEatModule>,
     periodic_swing: Option<PeriodicSwingModule>,
@@ -419,6 +393,7 @@ pub struct BotState {
     soundness: Option<SoundnessModule>,
     emergency_quit: Option<EmergencyQuitModule>,
     devnet_integration: Option<DevNetIntegrationModule>,
+    server_tps: Option<ServerTps>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -429,15 +404,22 @@ impl Default for BotState {
     fn default() -> Self {
         Self {
             last_dm_handled_at: Default::default(),
+            root_task_group: Arc::new(Mutex::new(TaskGroup::new_root())),
+            root_task_last_display: Default::default(),
 
             auto_eat: default_if(OPTS.auto_eat),
             periodic_swing: default_if(OPTS.periodic_swing),
-            stasis: default_if(!OPTS.no_stasis),
+            stasis: if !OPTS.no_stasis {
+                Some(StasisModule::new(!OPTS.no_trapdoor_reopen))
+            } else {
+                None
+            },
             visual_range: Some(Default::default()),
             look_at_players: OPTS.look_at_players.map(|dist| LookAtPlayersModule::new(dist)),
             soundness: Some(Default::default()),
             emergency_quit: OPTS.emergency_quit.map(|hp| EmergencyQuitModule::new(hp)),
             devnet_integration: default_if(OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some()),
+            server_tps: Some(Default::default()),
         }
     }
 }
@@ -469,11 +451,27 @@ impl BotState {
         if let Some(module) = &self.devnet_integration {
             modules.push(module);
         };
+        if let Some(module) = &self.server_tps {
+            modules.push(module);
+        };
         modules
+    }
+
+    pub fn add_task(&self, task: impl Into<Box<dyn Task>>) {
+        self.root_task_group.lock().add(task);
+    }
+
+    pub fn add_task_now(&self, bot: Client, bot_state: &BotState, task: impl Into<Box<dyn Task>>) -> Result<()> {
+        self.root_task_group.lock().add_now(bot.clone(), bot_state, task)?;
+        Ok(())
+    }
+
+    pub fn tasks(&self) -> u64 {
+        self.root_task_group.lock().remaining()
     }
 }
 
-async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> anyhow::Result<()> {
+async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()> {
     if let Some(ref module) = bot_state.auto_eat {
         module
             .handle(bot.clone(), &event, &bot_state)
@@ -521,6 +519,48 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> anyhow::R
             .handle(bot.clone(), &event, &bot_state)
             .await
             .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.server_tps {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+
+    // Process task(s)
+    {
+        let mut task_root = bot_state.root_task_group.lock();
+        if task_root.remaining() > 0 {
+            let mut do_cleanup = false;
+            match task_root.handle(bot.clone(), &bot_state, &event).context("Handling root TaskGroup") {
+                Ok(TaskOutcome::Ongoing) => {}
+                Ok(TaskOutcome::Succeeded) => {
+                    do_cleanup = true;
+                }
+                Ok(TaskOutcome::Failed { reason }) => {
+                    do_cleanup = true;
+                    error!("Task Fail: {reason}");
+                }
+                Err(err) => {
+                    error!("Got error while handling task {task_root}: {err:?}");
+                    bot_state.root_task_last_display.lock().clear();
+                    *task_root = TaskGroup::new_root();
+                }
+            }
+
+            if do_cleanup {
+                info!("All Tasks done ({}).", task_root.subtasks.len());
+                bot_state.root_task_last_display.lock().clear();
+                *task_root = TaskGroup::new_root();
+            } else {
+                let mut last_task_display = bot_state.root_task_last_display.lock();
+                let current_task_display = task_root.to_string();
+                if current_task_display != *last_task_display {
+                    info!("Task Status: {current_task_display}");
+                    *last_task_display = current_task_display;
+                }
+            }
+        }
     }
 
     match event {
