@@ -56,7 +56,7 @@ pub const EXITCODE_LOW_HEALTH_OR_TOTEM_POP: i32 = 69;
 #[derive(Parser)]
 #[clap(author, version)]
 struct Opts {
-    /// What server ((and port) to connect to
+    /// What server (and port) to connect to
     server_address: String,
 
     /// Player names who are considered more trustworthy for certain commands
