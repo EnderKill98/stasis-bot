@@ -3,7 +3,7 @@ use crate::task::delay_ticks::DelayTicksTask;
 use crate::task::group::TaskGroup;
 use crate::task::oncefunc::OnceFuncTask;
 use crate::task::pathfind;
-use crate::task::pathfind::PathfindTask;
+use crate::task::pathfind::{BoxedPathfindGoal, PathfindTask};
 use crate::{BotState, OPTS};
 use anyhow::Context;
 use azalea::blocks::Block;
@@ -12,6 +12,7 @@ use azalea::ecs::prelude::With;
 use azalea::entity::Position;
 use azalea::entity::metadata::Player;
 use azalea::packet::game::SendPacketEvent;
+use azalea::pathfinder::goals;
 use azalea::pathfinder::goals::{BlockPosGoal, ReachBlockPosGoal};
 use azalea::protocol::packets::game::s_interact::InteractionHand;
 use azalea::protocol::packets::game::s_use_item_on::BlockHit;
@@ -27,15 +28,17 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct StasisModule {
     pub do_reopen_trapdoor: bool,
+    pub alternate_trapdoor_goal: bool,
 
     pub remembered_trapdoor_positions: Arc<Mutex<HashMap<String, BlockPos>>>,
     pub last_idle_pos: Arc<Mutex<Option<BlockPos>>>,
 }
 
 impl StasisModule {
-    pub fn new(do_reopen_trapdoor: bool) -> Self {
+    pub fn new(do_reopen_trapdoor: bool, alternate_trapdoor_goal: bool) -> Self {
         Self {
             do_reopen_trapdoor,
+            alternate_trapdoor_goal,
 
             remembered_trapdoor_positions: Default::default(),
             last_idle_pos: Default::default(),
@@ -148,9 +151,16 @@ impl StasisModule {
         }
         info!("Walking to {trapdoor_pos:?}...");
 
-        let trapdoor_goal = ReachBlockPosGoal {
-            pos: trapdoor_pos.to_owned(),
-            chunk_storage: bot.world().read().chunks.clone(),
+        let trapdoor_goal: Arc<BoxedPathfindGoal> = if self.alternate_trapdoor_goal {
+            Arc::new(BoxedPathfindGoal::new(goals::RadiusGoal {
+                pos: trapdoor_pos.center(),
+                radius: 3.0,
+            }))
+        } else {
+            Arc::new(BoxedPathfindGoal::new(ReachBlockPosGoal {
+                pos: trapdoor_pos.to_owned(),
+                chunk_storage: bot.world().read().chunks.clone(),
+            }))
         };
         let return_goal = BlockPosGoal(self.return_pos(&mut bot.clone()));
 
@@ -182,7 +192,7 @@ impl StasisModule {
         let remembered_trapdoor_positions = self.remembered_trapdoor_positions.clone();
         bot_state.add_task(
             TaskGroup::new(format!("Pull {username}'s Pearl"))
-                .with(PathfindTask::new(!OPTS.no_mining, trapdoor_goal, format!("near {username}'s Pearl")))
+                .with(PathfindTask::new_concrete(!OPTS.no_mining, trapdoor_goal, format!("near {username}'s Pearl")))
                 .with(OnceFuncTask::new(format!("Close {username}'s Trapdoor and Greet"), move |bot, _bot_state| {
                     bot.ecs.lock().send_event(interact_event);
                     remembered_trapdoor_positions.lock().remove(&username_clone);
@@ -239,9 +249,9 @@ impl Module for StasisModule {
                                 for y_offset_abs in 0..16 {
                                     for y_offset_mult in [1, -1] {
                                         let y_offset = y_offset_abs * y_offset_mult;
-                                        let azalea_block_pos = azalea::BlockPos::new(
+                                        let azalea_block_pos = BlockPos::new(
                                             packet.position.x.floor() as i32,
-                                            (packet.position.y.floor() + 1.0) as i32 + y_offset,
+                                            (packet.position.y.floor() + 5.0) as i32 + y_offset,
                                             packet.position.z.floor() as i32,
                                         );
                                         if let Some(state) = world.get_block_state(&azalea_block_pos) {

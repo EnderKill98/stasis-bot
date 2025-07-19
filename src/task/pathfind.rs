@@ -5,11 +5,32 @@ use azalea::pathfinder::PathfinderClientExt;
 use azalea::pathfinder::astar::PathfinderTimeout;
 use azalea::pathfinder::goals::Goal;
 use azalea::pathfinder::{GotoEvent, Pathfinder, StopPathfindingEvent, moves};
-use azalea::{Client, Event, Vec3};
+use azalea::{BlockPos, Client, Event, Vec3};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::Instant;
+
+#[derive(Debug)]
+pub struct BoxedPathfindGoal {
+    pub goal: Box<dyn Goal + Sync + Send>,
+}
+
+impl BoxedPathfindGoal {
+    pub fn new<G: Goal + Sync + Send + 'static>(goal: G) -> Self {
+        BoxedPathfindGoal { goal: Box::new(goal) }
+    }
+}
+
+impl Goal for BoxedPathfindGoal {
+    fn heuristic(&self, n: BlockPos) -> f32 {
+        self.goal.heuristic(n)
+    }
+
+    fn success(&self, n: BlockPos) -> bool {
+        self.goal.success(n)
+    }
+}
 
 pub fn is_calculating(bot: &Client) -> bool {
     let mut ecs = bot.ecs.lock();
@@ -31,9 +52,9 @@ pub fn is_pathfinding(bot: &Client) -> bool {
     }
 }
 
-pub struct PathfindTask<G: Goal + Debug + Send + Sync + 'static> {
+pub struct PathfindTask {
     allow_mining: bool,
-    goal: Arc<G>,
+    goal: Arc<BoxedPathfindGoal>,
     goal_name: String,
     last_is_calculating: bool,
     //started: bool,
@@ -41,11 +62,15 @@ pub struct PathfindTask<G: Goal + Debug + Send + Sync + 'static> {
     last_position: Option<(Instant, Vec3)>,
 }
 
-impl<G: Goal + Debug + Send + Sync + 'static> PathfindTask<G> {
-    pub fn new(allow_mining: bool, goal: G, goal_name: impl AsRef<str>) -> Self {
+impl PathfindTask {
+    pub fn new<G: Goal + Debug + Send + Sync + 'static>(allow_mining: bool, goal: G, goal_name: impl AsRef<str>) -> Self {
+        Self::new_concrete(allow_mining, Arc::new(BoxedPathfindGoal::new(goal)), goal_name)
+    }
+
+    pub fn new_concrete(allow_mining: bool, goal: Arc<BoxedPathfindGoal>, goal_name: impl AsRef<str>) -> Self {
         Self {
             allow_mining,
-            goal: Arc::new(goal),
+            goal,
             goal_name: goal_name.as_ref().to_string(),
             last_is_calculating: false,
             //started: false,
@@ -55,7 +80,7 @@ impl<G: Goal + Debug + Send + Sync + 'static> PathfindTask<G> {
     }
 }
 
-impl<G: Goal + Debug + Send + Sync + 'static> Display for PathfindTask<G> {
+impl Display for PathfindTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if self.last_is_calculating {
             write!(f, "Pathfind (calculating path to {})", self.goal_name)
@@ -65,7 +90,7 @@ impl<G: Goal + Debug + Send + Sync + 'static> Display for PathfindTask<G> {
     }
 }
 
-impl<G: Goal + Send + Sync + 'static> Task for PathfindTask<G> {
+impl Task for PathfindTask {
     fn start(&mut self, bot: Client, _bot_state: &BotState) -> anyhow::Result<()> {
         /*if self.started {
             bail!("Already started!");

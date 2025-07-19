@@ -146,6 +146,10 @@ struct Opts {
     /// Don't re-open trapdoor after teleport. Use if teleports fail or you're paranoid.
     #[clap(long)]
     no_trapdoor_reopen: bool,
+
+    /// Changes the type of goal to reach pearls. Use this if reaching your pearl setup has issues
+    #[clap(long)]
+    alternate_trapdoor_goal: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -410,7 +414,7 @@ impl Default for BotState {
             auto_eat: default_if(OPTS.auto_eat),
             periodic_swing: default_if(OPTS.periodic_swing),
             stasis: if !OPTS.no_stasis {
-                Some(StasisModule::new(!OPTS.no_trapdoor_reopen))
+                Some(StasisModule::new(!OPTS.no_trapdoor_reopen, OPTS.alternate_trapdoor_goal))
             } else {
                 None
             },
