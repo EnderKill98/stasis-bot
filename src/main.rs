@@ -8,6 +8,7 @@ extern crate tracing;
 
 use crate::module::Module;
 use crate::module::autoeat::AutoEatModule;
+use crate::module::beertender::BeertenderModule;
 use crate::module::devnet_handler::DevNetIntegrationModule;
 use crate::module::emergency_quit::EmergencyQuitModule;
 use crate::module::look_at_players::LookAtPlayersModule;
@@ -398,6 +399,7 @@ pub struct BotState {
     emergency_quit: Option<EmergencyQuitModule>,
     devnet_integration: Option<DevNetIntegrationModule>,
     server_tps: Option<ServerTps>,
+    beertender: Option<BeertenderModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -424,6 +426,7 @@ impl Default for BotState {
             emergency_quit: OPTS.emergency_quit.map(|hp| EmergencyQuitModule::new(hp)),
             devnet_integration: default_if(OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some()),
             server_tps: Some(Default::default()),
+            beertender: Some(Default::default()),
         }
     }
 }
@@ -456,6 +459,9 @@ impl BotState {
             modules.push(module);
         };
         if let Some(module) = &self.server_tps {
+            modules.push(module);
+        };
+        if let Some(module) = &self.beertender {
             modules.push(module);
         };
         modules
@@ -525,6 +531,12 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()
             .with_context(|| format!("Handling {}", module.name()))?;
     }
     if let Some(ref module) = bot_state.server_tps {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.beertender {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
@@ -629,6 +641,7 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()
                             }
                         }
                         Err(err) => {
+                            error!("Command execution failed: {err:?}");
                             commands::send_command(&mut bot, &format!("msg {sender} Oops: {err}"));
                         }
                     }

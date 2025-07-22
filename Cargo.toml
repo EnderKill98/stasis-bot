@@ -46,3 +46,5 @@ tokio-tungstenite = { version = "0.27", features = [ "native-tls" ] }
 futures-util = "0.3"
 
 async-trait = "0.1"
+
+rand = "0.9"

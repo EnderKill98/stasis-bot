@@ -2,6 +2,7 @@ use crate::BotState;
 use azalea::{Client, Event};
 
 pub mod autoeat;
+pub mod beertender;
 pub mod devnet_handler;
 pub mod emergency_quit;
 pub mod look_at_players;

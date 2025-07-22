@@ -1,3 +1,4 @@
+use crate::module::beertender::BeertenderModule;
 use crate::task::Task;
 use crate::task::eat::EatTask;
 use crate::task::group::TaskGroup;
@@ -38,6 +39,9 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             if bot_state.server_tps.is_some() {
                 commands.push("!tps");
             }
+            if bot_state.beertender.is_some() {
+                commands.push("!beer");
+            }
             if sender_is_admin {
                 commands.append(&mut vec![
                     "!comehere",
@@ -56,6 +60,13 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 ]);
                 if OPTS.enable_pos_command {
                     commands.push("!pos");
+                }
+                if bot_state.beertender.is_some() {
+                    commands.push("!totalBeer");
+                    commands.push("!maxBeer");
+                    commands.push("!resetBeerFor");
+                    commands.push("!resetBeerForAll");
+                    commands.push("!reloadBeerConfig");
                 }
             }
             if !OPTS.admin.is_empty() {
@@ -515,6 +526,133 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             }
 
             send_command(bot, format!("msg {sender} Unequipped {total} armor pieces!",));
+            Ok(true)
+        }
+
+        "beer" => {
+            let beertender = bot_state.beertender.as_ref();
+            if beertender.is_none() {
+                send_command(bot, format!("msg {sender} No beertender module active! :(..."));
+                return Ok(true);
+            }
+            let stasis = beertender.unwrap();
+            let bot = bot.clone();
+            stasis
+                .request_beer(&sender.clone(), &mut bot.clone(), bot_state, move |_error, message| {
+                    send_command(&mut bot.clone(), format!("msg {sender} {message}"));
+                })
+                .context("Request beer")?;
+            Ok(true)
+        }
+
+        "totalbeer" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+
+            send_command(
+                &mut bot.clone(),
+                format!("msg {sender} I have {} beer left.", BeertenderModule::beer_count(bot)),
+            );
+            Ok(true)
+        }
+
+        "maxbeer" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+            let beertender = bot_state.beertender.as_ref();
+            if beertender.is_none() {
+                send_command(bot, format!("msg {sender} No beertender module active! :(..."));
+                return Ok(true);
+            }
+            let beertender = beertender.unwrap();
+
+            if args.len() >= 1 {
+                beertender.config.lock().max_beer = args[0].parse::<u32>()?;
+                beertender.save_config().await?;
+            }
+
+            send_command(
+                &mut bot.clone(),
+                format!("msg {sender} Max beer per person: {} (add number to change)", beertender.config.lock().max_beer),
+            );
+            Ok(true)
+        }
+
+        "resetbeerfor" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+            let beertender = bot_state.beertender.as_ref();
+            if beertender.is_none() {
+                send_command(bot, format!("msg {sender} No beertender module active! :(..."));
+                return Ok(true);
+            }
+            let beertender = beertender.unwrap();
+
+            if args.len() == 0 {
+                send_command(&mut bot.clone(), format!("msg {sender} Specify who's handed out beer count to reset."));
+                return Ok(true);
+            }
+
+            beertender.config.lock().beer_handed_out.remove(&args[0].to_lowercase());
+            beertender.save_config().await?;
+            send_command(&mut bot.clone(), format!("msg {sender} Reset {}'s handed out beer count.", args[0]));
+            Ok(true)
+        }
+
+        "resetbeerforall" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+            let beertender = bot_state.beertender.as_ref();
+            if beertender.is_none() {
+                send_command(bot, format!("msg {sender} No beertender module active! :(..."));
+                return Ok(true);
+            }
+            let beertender = beertender.unwrap();
+
+            beertender.config.lock().beer_handed_out.clear();
+            beertender.save_config().await?;
+
+            send_command(&mut bot.clone(), format!("msg {sender} Reset everyones handed out beer count!"));
+            Ok(true)
+        }
+
+        "reloadbeerconfig" => {
+            if !sender_is_admin {
+                send_command(
+                    bot,
+                    format!("msg {sender} Sorry, but you need to be specified as an admin to use this command!"),
+                );
+                return Ok(true);
+            }
+            let beertender = bot_state.beertender.as_ref();
+            if beertender.is_none() {
+                send_command(bot, format!("msg {sender} No beertender module active! :(..."));
+                return Ok(true);
+            }
+            let beertender = beertender.unwrap();
+
+            beertender.load_config().await?;
+            send_command(&mut bot.clone(), format!("msg {sender} Reloaded beertender-config!"));
             Ok(true)
         }
 
