@@ -6,6 +6,7 @@ pub mod group;
 pub mod oncefunc;
 pub mod pathfind;
 pub mod sip_beer;
+pub mod swing_beer;
 pub mod validate;
 
 use crate::BotState;

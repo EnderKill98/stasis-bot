@@ -4,20 +4,25 @@ use crate::task::delay_ticks::DelayTicksTask;
 use crate::task::group::TaskGroup;
 use crate::task::oncefunc::OnceFuncTask;
 use crate::task::sip_beer::SipBeerTask;
+use crate::task::swing_beer::SwingBeerTask;
 use anyhow::{Context, anyhow};
+use azalea::ecs::entity::Entity;
 use azalea::ecs::prelude::With;
 use azalea::entity::metadata::Player;
-use azalea::entity::{EyeHeight, LookDirection, Pose, Position};
+use azalea::entity::{EntityDataValue, EyeHeight, LookDirection, Pose, Position};
 use azalea::inventory::operations::ClickType;
 use azalea::inventory::{Inventory, ItemStack};
 use azalea::packet::game::SendPacketEvent;
-use azalea::protocol::packets::game::{ServerboundContainerClick, ServerboundGamePacket, ServerboundMovePlayerRot};
+use azalea::protocol::packets::game::c_animate::AnimationAction;
+use azalea::protocol::packets::game::c_set_equipment::EquipmentSlot;
+use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundContainerClick, ServerboundGamePacket, ServerboundMovePlayerRot};
 use azalea::registry::Item;
+use azalea::world::MinecraftEntityId;
 use azalea::{Client, Event, GameProfileComponent, Vec3};
 use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Add;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +34,9 @@ pub struct BeerConfig {
     pub beer_handed_out: HashMap<String, u32>,
     pub sip_random_min_secs: u64,
     pub sip_random_max_secs: u64,
+
+    pub sip_when_others_sip: bool,
+    pub prost_when_others_prost: bool,
 
     pub messages_come_closer: Vec<String>,
     pub messages_denied_beer: Vec<String>,
@@ -46,6 +54,9 @@ impl Default for BeerConfig {
             sip_random_min_secs: 5,
             sip_random_max_secs: 15,
 
+            sip_when_others_sip: true,
+            prost_when_others_prost: true,
+
             messages_come_closer: vec!["Come closer".to_owned()],
             messages_denied_beer: vec!["You had enough buddy".to_owned()],
             messages_gave_beer: vec![],
@@ -60,6 +71,7 @@ pub struct BeertenderModule {
     pub config: Arc<Mutex<BeerConfig>>,
 
     random_sipping: Arc<Mutex<Option<(u64 /*Ticks*/, u64 /*Target ticks*/)>>>,
+    holds_beer: Arc<Mutex<HashSet<i32>>>,
 }
 
 impl BeertenderModule {
@@ -343,6 +355,27 @@ impl BeertenderModule {
         }
         Ok(())
     }
+
+    fn close_and_holding_beer(&self, bot: &mut Client, id: MinecraftEntityId) -> Option<(Entity, String /*PlayerName*/)> {
+        let entity = bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(|(entity_id,): &(&MinecraftEntityId,)| entity_id.0 == id.0);
+        if entity.is_none() {
+            return None; // Not a player
+        }
+        let entity = entity.unwrap();
+
+        let own_pos = bot.entity_component::<Position>(bot.entity);
+        let entity_pos = bot.entity_component::<Position>(entity);
+
+        if own_pos.distance_to(&Vec3::from(&entity_pos)) >= 12.0 {
+            return None; // Too far away
+        }
+
+        if !self.holds_beer.lock().contains(&id.0) {
+            return None; // Not holding beer
+        }
+
+        Some((entity, bot.entity_component::<GameProfileComponent>(entity).name.to_owned()))
+    }
 }
 
 #[async_trait::async_trait]
@@ -351,13 +384,78 @@ impl Module for BeertenderModule {
         "Stasis"
     }
 
-    async fn handle(&self, _bot: Client, event: &Event, bot_state: &BotState) -> anyhow::Result<()> {
+    async fn handle(&self, mut bot: Client, event: &Event, bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Login => {
                 info!("Loading beertender-config...");
                 self.load_config().await?;
+                self.holds_beer.lock().clear();
             }
             Event::Disconnect(_) => {}
+            Event::Packet(packet) => match packet.as_ref() {
+                ClientboundGamePacket::SetEquipment(packet) => {
+                    for (slot, itemstack) in packet.slots.slots.iter() {
+                        if *slot as usize == EquipmentSlot::MainHand as usize {
+                            if itemstack.kind() == Item::HoneyBottle {
+                                // Now holding beer
+                                self.holds_beer.lock().insert(packet.entity_id.0);
+                            } else {
+                                // No longer holding beer
+                                self.holds_beer.lock().remove(&packet.entity_id.0);
+                            }
+                        }
+                    }
+                }
+                ClientboundGamePacket::RemoveEntities(packet) => {
+                    let mut holds_beer = self.holds_beer.lock();
+                    for id in &packet.entity_ids {
+                        holds_beer.remove(&id.0);
+                    }
+                }
+                ClientboundGamePacket::SetEntityData(packet) => {
+                    let mut is_interacting = false;
+                    for item in packet.packed_items.0.iter() {
+                        // https://minecraft.wiki/w/Java_Edition_protocol/Entity_metadata#Entity_Metadata_Format
+                        if item.index == 8
+                            && let EntityDataValue::Byte(byte) = item.value
+                            && byte & 0x02 == 0 /* Is Main hand */
+                            && byte & 0x01 > 0
+                        /* Is interacting */
+                        {
+                            is_interacting = true;
+                            break;
+                        }
+                    }
+
+                    if !is_interacting || !self.config.lock().sip_when_others_sip || bot_state.tasks() > 0 {
+                        return Ok(());
+                    }
+
+                    let maybe_entity_and_name = self.close_and_holding_beer(&mut bot, packet.id);
+                    if maybe_entity_and_name.is_none() {
+                        return Ok(());
+                    }
+                    let (_entity, entity_name) = maybe_entity_and_name.unwrap();
+                    info!("Noticed that {entity_name} is interacting with their beer (Prost!). Doing the same!");
+                    bot_state.add_task(SipBeerTask::default());
+                }
+                ClientboundGamePacket::Animate(packet) => {
+                    if packet.action as usize != AnimationAction::SwingMainHand as usize || !self.config.lock().prost_when_others_prost || bot_state.tasks() > 0
+                    {
+                        return Ok(());
+                    }
+
+                    let maybe_entity_and_name = self.close_and_holding_beer(&mut bot, packet.id);
+                    if maybe_entity_and_name.is_none() {
+                        return Ok(());
+                    }
+                    let (_entity, entity_name) = maybe_entity_and_name.unwrap();
+
+                    info!("Noticed that {entity_name} is swinging their beer (Prost!). Doing the same!");
+                    bot_state.add_task(SwingBeerTask::default());
+                }
+                _ => {}
+            },
             Event::Tick => {
                 if bot_state.tasks() > 0 {
                     // Reset when bot does something
@@ -375,7 +473,7 @@ impl Module for BeertenderModule {
                     if let Some(ref mut random_sipping) = *random_sipping {
                         random_sipping.0 += 1;
                         if random_sipping.0 >= random_sipping.1 {
-                            bot_state.add_task(SipBeerTask::new(rand::rng().random_range(0..10) >= 8, rand::rng().random_range(15..32)));
+                            bot_state.add_task(SipBeerTask::default());
                             reset_random_sipping = true;
                         }
                     }

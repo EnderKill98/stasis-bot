@@ -20,6 +20,7 @@ pub struct SipBeerTask {
     // Config
     look_away: bool,
     ticks: u32,
+    pitch: f32,
 
     // State
     started_at: Instant,
@@ -30,18 +31,15 @@ pub struct SipBeerTask {
 
 impl Default for SipBeerTask {
     fn default() -> Self {
-        SipBeerTask::new(false, 15)
+        Self::new_random(0)
     }
 }
 
 impl SipBeerTask {
-    pub fn new(look_away: bool, ticks: u32) -> Self {
-        Self::new_with_repeats(look_away, ticks, 0)
-    }
-
-    fn new_with_repeats(look_away: bool, ticks: u32, repeats: u32) -> Self {
+    fn new(look_away: bool, pitch: f32, ticks: u32, repeats: u32) -> Self {
         Self {
             look_away,
+            pitch,
             ticks,
 
             // Doesn't matter, yet
@@ -50,6 +48,13 @@ impl SipBeerTask {
             orig_look_direction: LookDirection::new(0.0, 0.0),
             repeats,
         }
+    }
+
+    fn new_random(repeats: u32) -> Self {
+        let look_away = rand::rng().random_range(0..10) >= 8;
+        let pitch = if look_away { -65.0 } else { -20.0 };
+        let ticks = rand::rng().random_range(15..32);
+        Self::new(look_away, pitch, ticks, repeats)
     }
 
     pub fn find_beer_in_hotbar(bot: &mut Client) -> Option<(u8, ItemStackData)> {
@@ -70,7 +75,6 @@ impl SipBeerTask {
 
 impl Display for SipBeerTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Changing this can break AutoEatModule::has_eat_task()!
         write!(
             f,
             "SipBeer ({} ticks{}{})",
@@ -133,7 +137,7 @@ impl Task for SipBeerTask {
             } else {
                 self.orig_look_direction.y_rot
             };
-            let pitch = -45.0 - rand::rng().random_range(0..25) as f32;
+            let pitch = (self.pitch - rand::rng().random_range(0..25) as f32).max(-90.0);
             *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = LookDirection::new(yaw, pitch);
 
             if (self.started_at.elapsed().as_millis() / 50) as u32 >= self.ticks {
@@ -144,13 +148,13 @@ impl Task for SipBeerTask {
                 if rand_float <= chance {
                     // Repeat sip in a bit again (chance exponentially decreases)
                     // Spawn as task to prevent deadlock
-                    let (look_away, ticks, repeats) = (self.look_away, self.ticks, self.repeats + 1);
+                    let (look_away, pitch, ticks, repeats) = (self.look_away, self.pitch, self.ticks, self.repeats + 1);
                     let bot_state = bot_state.clone();
                     tokio::spawn(async move {
                         bot_state.add_task(
                             TaskGroup::new("Repeat sipping (auto)")
                                 .with(DelayTicksTask::new(4))
-                                .with(SipBeerTask::new_with_repeats(look_away, ticks, repeats)),
+                                .with(SipBeerTask::new(look_away, pitch, ticks, repeats)),
                         );
                     });
                 }
