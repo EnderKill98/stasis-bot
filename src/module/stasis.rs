@@ -9,7 +9,7 @@ use crate::task::pathfind::{BoxedPathfindGoal, PathfindTask};
 use crate::task::wait_for_block_unpower::WaitForBlockUnpowerTask;
 use crate::{BotState, OPTS};
 use crate::{blockpos_string, commands};
-use anyhow::{Context, bail};
+use anyhow::{Context, anyhow, bail};
 use azalea::blocks::Block;
 use azalea::blocks::properties::Open;
 use azalea::ecs::entity::Entity;
@@ -70,6 +70,12 @@ pub enum StasisChamberDefinition {
         base_pos: BlockPos,
         endpoint: LecternRedcoderEndpoint,
     },
+    RedstoneSingleTrigger {
+        #[serde(with = "blockpos_string")]
+        base_pos: BlockPos,
+        #[serde(with = "blockpos_string")]
+        trigger_pos: BlockPos,
+    },
 }
 
 impl StasisChamberDefinition {
@@ -79,6 +85,7 @@ impl StasisChamberDefinition {
             Self::SecuredFlippableTrapdoor { .. } => "SecuredFlippableTrapdoor",
             Self::RedcoderTrapdoor { .. } => "RedcoderTrapdoor",
             Self::RedcoderShay { .. } => "RedcoderShay",
+            Self::RedstoneSingleTrigger { .. } => "RedstoneSingleTrigger",
         }
     }
 }
@@ -322,7 +329,8 @@ impl StasisModule {
                             | StasisChamberDefinition::SecuredFlippableTrapdoor {
                                 trigger_trapdoor_pos: existing_pos,
                                 ..
-                            } => {
+                            }
+                            | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: existing_pos, .. } => {
                                 if chamber.definition != definition
                                     && existing_pos.x == rough_pos.x
                                     && existing_pos.z == rough_pos.z
@@ -349,7 +357,6 @@ impl StasisModule {
                     for (chamber_index_index, chamber_index) in remove_chambers_indices.into_iter().enumerate() {
                         config.chambers.remove(chamber_index - chamber_index_index);
                     }
-
                     if let Some(chamber_index) = config.chambers.iter_mut().position(|chamber| chamber.definition == definition) {
                         let chamber = &mut config.chambers[chamber_index];
                         info!(
@@ -371,14 +378,15 @@ impl StasisModule {
             }
         }
 
-        // Find existing redcoder chamber
+        // Find existing redcoder chamber or others
         let pearl_block_pos = pearl_pos.to_block_pos_floor();
         for chamber in config.chambers.iter_mut() {
             match chamber.definition {
                 StasisChamberDefinition::RedcoderShay { base_pos: existing_pos, .. }
                 | StasisChamberDefinition::RedcoderTrapdoor {
                     trapdoor_pos: existing_pos, ..
-                } => {
+                }
+                | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: existing_pos, .. } => {
                     if existing_pos.x == pearl_block_pos.x && existing_pos.z == pearl_block_pos.z && (pearl_block_pos.y - existing_pos.y).abs() <= 5 {
                         info!("Found existing chamber definition ({}) at {existing_pos}.", chamber.definition.type_name());
                         return Some(chamber);
@@ -810,6 +818,75 @@ impl StasisModule {
 
                 bot_state.add_task(group);
             }
+            StasisChamberDefinition::RedstoneSingleTrigger { trigger_pos, .. } => {
+                let trapdoor_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(goals::ReachBlockPosGoal {
+                    pos: trigger_pos.to_owned(),
+                    chunk_storage: bot.world().read().chunks.clone(),
+                }));
+                let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()));
+                let greeting = format!("Welcome back, {occupant}!");
+
+                let mut group = TaskGroup::new(format!("Pull {occupant}'s chamber"));
+                group = group.with(PathfindTask::new_concrete(
+                    !OPTS.no_mining,
+                    trapdoor_goal,
+                    format!("near trigger Block for {occupant}'s Chamber"),
+                ));
+
+                let mut trigger_group = TaskGroup::new_with_hide_fail("Check and trigger", true);
+
+                let occupying_pearl_uuids_clone = occupying_pearl_uuids.clone();
+                let feedback_clone = feedback.clone();
+                let (self_clone, self_clone_2, self_clone_3) = (self.clone(), self.clone(), self.clone());
+                let definition_clone = definition.clone();
+                trigger_group.add(OnceFuncTask::new("Check if any pearl exists", move |mut bot, bot_state| {
+                    let any_pearl = bot
+                        .entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(entity_uuid,): &(&EntityUuid,)| occupying_pearl_uuids_clone.contains(entity_uuid))
+                        .is_some();
+                    let is_hanging = bot_state.server_tps.map(|server_tps| server_tps.is_server_likely_hanging()).unwrap_or(false);
+                    if !any_pearl && !is_hanging {
+                        for chamber in &mut self_clone_3.config.lock().chambers {
+                            if chamber.definition == definition_clone {
+                                chamber.occupants.clear();
+                            }
+                        }
+
+                        tokio::spawn(async move {
+                            if let Err(err) = self_clone_3.save_config().await {
+                                error!("Failed to save stasis-config: {err:?}");
+                            }
+                        });
+                        feedback_clone(
+                            false,
+                            "Sorry, but it seems this stasis chamber has no pearls in it! I removed it. Try again to pull the next if you got one.",
+                        );
+                        bail!("Chamber had no pearls!");
+                    }
+                    Ok(())
+                }));
+                trigger_group = trigger_group
+                    .with(OnceFuncTask::new("Add expected despawning pearls", move |_bot, _bot_state| {
+                        let mut expect_despawn_of = self_clone.expect_despawn_of.lock();
+                        occupying_pearl_uuids.iter().for_each(|pearl_uuid| {
+                            expect_despawn_of.insert(*pearl_uuid);
+                        });
+                        Ok(())
+                    }))
+                    .with(AffectBlockTask::new(trigger_pos))
+                    .with(OnceFuncTask::new(format!("Greet {occupant}"), move |_bot, _bot_state| {
+                        feedback(false, &greeting);
+                        Ok(())
+                    }))
+                    .with(OnceFuncTask::new("Clean unknown pearls", move |_bot, _bot_state| {
+                        self_clone_2.remove_occupants_with_no_pearl_uuid(&definition);
+                        Ok(())
+                    }));
+
+                group.add(trigger_group);
+                group.add(PathfindTask::new(!OPTS.no_mining, return_goal, "old spot"));
+
+                bot_state.add_task(group);
+            }
         }
         Ok(())
     }
@@ -824,8 +901,15 @@ impl Module for StasisModule {
     async fn handle(&self, mut bot: Client, event: &Event, bot_state: &BotState) -> anyhow::Result<()> {
         match event {
             Event::Login => {
-                info!("Loading remembered trapdoor positions...");
-                self.load_config().await?;
+                info!("Loading stasis-config...");
+                if let Err(err) = self.load_config().await {
+                    error!("Failed to load stasis-config: {err:?}");
+                    std::fs::rename(
+                        Self::config_path(),
+                        format!("{}.broken", Self::config_path().as_os_str().to_str().ok_or(anyhow!("Path err"))?),
+                    )?;
+                    self.load_config().await?;
+                }
                 self.clear_idle_pos("Login-Event");
                 self.spawned_pearl_uuids.lock().clear();
                 self.expect_despawn_of.lock().clear();
@@ -881,6 +965,7 @@ impl Module for StasisModule {
                                     | StasisChamberDefinition::SecuredFlippableTrapdoor { trigger_trapdoor_pos: pos, .. }
                                     | StasisChamberDefinition::RedcoderTrapdoor { trapdoor_pos: pos, .. }
                                     | StasisChamberDefinition::RedcoderShay { base_pos: pos, .. } => pos,
+                                    StasisChamberDefinition::RedstoneSingleTrigger { base_pos: pos, .. } => pos,
                                 };
 
                                 let own_pos = Vec3::from(&bot.component::<Position>());
