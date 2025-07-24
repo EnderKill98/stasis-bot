@@ -1,4 +1,4 @@
-use crate::module::stasis::{ChamberOccupant, LecternRecoderTerminal, LecternRedcoderEndpoint, StasisChamberDefinition, StasisChamberEntry};
+use crate::module::stasis::{ChamberOccupant, LecternRedcoderEndpoint, LecternRedcoderTerminal, StasisChamberDefinition, StasisChamberEntry};
 use crate::task::Task;
 use crate::task::eat::EatTask;
 use crate::task::group::TaskGroup;
@@ -201,7 +201,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                     return Ok(true);
                 }
 
-                config.lectern_redcoder_terminals.push(LecternRecoderTerminal {
+                config.lectern_redcoder_terminals.push(LecternRedcoderTerminal {
                     id: name.to_owned(),
                     button,
                     lectern,
@@ -223,7 +223,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                     for (chamber_index, chamber) in config.chambers.iter().enumerate() {
                         match &chamber.definition {
                             StasisChamberDefinition::RedcoderShay { endpoint, .. } | StasisChamberDefinition::RedcoderTrapdoor { endpoint, .. } => {
-                                if endpoint.lectern_recoder_terminal_id == terminal_name {
+                                if endpoint.lectern_redcoder_terminal_id == terminal_name {
                                     remove_chamber_indices.push(chamber_index);
                                 }
                             }
@@ -273,7 +273,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 for chamber in &config.chambers {
                     match &chamber.definition {
                         StasisChamberDefinition::RedcoderShay { endpoint, .. } | StasisChamberDefinition::RedcoderTrapdoor { endpoint, .. } => {
-                            if &endpoint.lectern_recoder_terminal_id == terminal_name && endpoint.chamber_index == index {
+                            if &endpoint.lectern_redcoder_terminal_id == terminal_name && endpoint.chamber_index == index {
                                 send_command(bot, format!("msg {sender} This chamber already exists!"));
                                 return Ok(true);
                             }
@@ -294,7 +294,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                     config.chambers.push(StasisChamberEntry {
                         definition: StasisChamberDefinition::RedcoderShay {
                             endpoint: LecternRedcoderEndpoint {
-                                lectern_recoder_terminal_id: terminal_name.to_owned(),
+                                lectern_redcoder_terminal_id: terminal_name.to_owned(),
                                 chamber_index: index,
                             },
                             base_pos: sender_pos.to_block_pos_floor(),
@@ -305,7 +305,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                     config.chambers.push(StasisChamberEntry {
                         definition: StasisChamberDefinition::RedcoderTrapdoor {
                             endpoint: LecternRedcoderEndpoint {
-                                lectern_recoder_terminal_id: terminal_name.to_owned(),
+                                lectern_redcoder_terminal_id: terminal_name.to_owned(),
                                 chamber_index: index,
                             },
                             trapdoor_pos: sender_pos.to_block_pos_floor(),
@@ -320,7 +320,7 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 for (chamber_index, chamber) in config.chambers.iter().enumerate() {
                     match &chamber.definition {
                         StasisChamberDefinition::RedcoderShay { endpoint, .. } | StasisChamberDefinition::RedcoderTrapdoor { endpoint, .. } => {
-                            if &endpoint.lectern_recoder_terminal_id == terminal_name && endpoint.chamber_index == index {
+                            if &endpoint.lectern_redcoder_terminal_id == terminal_name && endpoint.chamber_index == index {
                                 remove_chamber_indices.push(chamber_index);
                             }
                         }

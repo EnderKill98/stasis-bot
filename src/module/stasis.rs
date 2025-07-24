@@ -32,7 +32,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
-pub struct LecternRecoderTerminal {
+pub struct LecternRedcoderTerminal {
     pub id: String,
     #[serde(with = "blockpos_string")]
     pub lectern: BlockPos,
@@ -42,7 +42,8 @@ pub struct LecternRecoderTerminal {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct LecternRedcoderEndpoint {
-    pub lectern_recoder_terminal_id: String,
+    #[serde(alias = "lectern_recoder_terminal_id")]
+    pub lectern_redcoder_terminal_id: String,
     pub chamber_index: usize,
 }
 
@@ -97,7 +98,7 @@ pub struct StasisChamberEntry {
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug, Eq, PartialEq)]
 pub struct StasisConfig {
-    pub lectern_redcoder_terminals: Vec<LecternRecoderTerminal>,
+    pub lectern_redcoder_terminals: Vec<LecternRedcoderTerminal>,
     pub chambers: Vec<StasisChamberEntry>,
 }
 
@@ -700,7 +701,7 @@ impl StasisModule {
                 let endpoint = endpoint.clone();
                 let mut terminal = None;
                 for lectern_redcoder_terminal in &self.config.lock().lectern_redcoder_terminals {
-                    if lectern_redcoder_terminal.id == endpoint.lectern_recoder_terminal_id {
+                    if lectern_redcoder_terminal.id == endpoint.lectern_redcoder_terminal_id {
                         terminal = Some(lectern_redcoder_terminal.clone());
                     }
                 }
@@ -709,7 +710,7 @@ impl StasisModule {
                         true,
                         &format!(
                             "Skill issue! I can't find details on LecternRedcoderTerminal \"{}\"!",
-                            endpoint.lectern_recoder_terminal_id
+                            endpoint.lectern_redcoder_terminal_id
                         ),
                     );
                     return Ok(());
