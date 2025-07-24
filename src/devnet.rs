@@ -22,7 +22,7 @@ pub enum Message {
     DestinationsRequest,
     #[serde(rename_all = "camelCase")]
     DestinationsResponse { destinations: Vec<Destination> },
-    #[serde(rename = "check_request")]
+    #[serde(rename_all = "camelCase")]
     CheckRequest { destination: String, for_mc_id: Uuid },
     #[serde(rename_all = "camelCase")]
     CheckResponse {
