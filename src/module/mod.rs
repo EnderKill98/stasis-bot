@@ -4,6 +4,7 @@ use azalea::{Client, Event};
 pub mod autoeat;
 pub mod devnet_handler;
 pub mod emergency_quit;
+pub mod legacy_stasis;
 pub mod look_at_players;
 pub mod periodic_swing;
 pub mod server_tps;

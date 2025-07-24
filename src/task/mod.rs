@@ -1,11 +1,14 @@
+pub mod affect_block;
 pub mod delay_duration;
 pub mod delay_ticks;
 pub mod eat;
 pub mod func;
 pub mod group;
 pub mod oncefunc;
+pub mod open_container_block;
 pub mod pathfind;
 pub mod validate;
+pub mod wait_for_block_unpower;
 
 use crate::BotState;
 use azalea::{Client, Event};

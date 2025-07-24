@@ -1,9 +1,11 @@
+use crate::module::stasis::{ChamberOccupant, LecternRecoderTerminal, LecternRedcoderEndpoint, StasisChamberDefinition, StasisChamberEntry};
 use crate::task::Task;
 use crate::task::eat::EatTask;
 use crate::task::group::TaskGroup;
 use crate::task::pathfind::PathfindTask;
 use crate::{BotState, DEVNET_TX, OPTS, devnet};
 use anyhow::Context;
+use azalea::blocks::Block;
 use azalea::core::direction::Direction;
 use azalea::inventory::operations::ClickType;
 use azalea::inventory::{Inventory, ItemStack, SetSelectedHotbarSlotEvent};
@@ -12,7 +14,7 @@ use azalea::protocol::packets::game::s_player_action::Action;
 use azalea::protocol::packets::game::{ServerboundContainerClick, ServerboundGamePacket, ServerboundPlayerAction, ServerboundSetCarriedItem};
 use azalea::registry::Item;
 use azalea::{
-    BlockPos, GameProfileComponent,
+    BlockPos, GameProfileComponent, Vec3,
     ecs::query::With,
     entity::{Position, metadata::Player},
     pathfinder::goals::BlockPosGoal,
@@ -20,6 +22,7 @@ use azalea::{
     world::InstanceName,
 };
 use std::collections::{HashMap, HashSet};
+use std::ops::Add;
 use uuid::Uuid;
 
 pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut command: String, args: Vec<String>) -> anyhow::Result<bool> {
@@ -56,6 +59,10 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 ]);
                 if OPTS.enable_pos_command {
                     commands.push("!pos");
+                }
+                if bot_state.stasis.is_some() {
+                    commands.push("!stasis-rt");
+                    commands.push("!stasis-rte");
                 }
             }
             if !OPTS.admin.is_empty() {
@@ -94,10 +101,246 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
             let stasis = stasis.unwrap();
             let bot = bot.clone();
             stasis
-                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, move |_error, message| {
+                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, 0, move |_error, message| {
                     send_command(&mut bot.clone(), format!("msg {sender} {message}"));
                 })
                 .context("Pull pearl")?;
+            Ok(true)
+        }
+        "stasis-rt" => {
+            let stasis = bot_state.stasis.as_ref();
+            if stasis.is_none() {
+                send_command(bot, format!("msg {sender} I'm not allowed to do pearl duties :(..."));
+                return Ok(true);
+            }
+            let stasis = stasis.unwrap();
+
+            let is_add = if args.len() > 1 && args[0].eq_ignore_ascii_case("add") {
+                true
+            } else if args.len() > 0 && args[0].eq_ignore_ascii_case("rm") {
+                false
+            } else {
+                send_command(bot, format!("msg {sender} Please specify either action: \"add <Name>\" or \"rm\"!"));
+                return Ok(true);
+            };
+
+            let sender_entity = bot.entity_by::<With<Player>, (&GameProfileComponent,)>(|(profile,): &(&GameProfileComponent,)| profile.name == sender);
+            if sender_entity.is_none() {
+                send_command(bot, format!("msg {sender} I can't find you!"));
+                return Ok(true);
+            }
+            let sender_entity = sender_entity.unwrap();
+            let sender_pos = Vec3::from(&bot.entity_component::<Position>(sender_entity));
+
+            let mut button: Option<BlockPos> = None;
+            let mut lectern: Option<BlockPos> = None;
+            {
+                let world = bot.world();
+                let world = world.read();
+                for x in -4..=4 {
+                    for y in -4..=4 {
+                        for z in -4..=4 {
+                            let pos = sender_pos.to_block_pos_floor().add(BlockPos::new(x, y, z));
+                            if world
+                                .get_block_state(&pos)
+                                .map(|state| Box::<dyn Block>::from(state).id().ends_with("_button"))
+                                .unwrap_or(false)
+                            {
+                                if button
+                                    .map(|b| b.center().distance_squared_to(&sender_pos) > pos.center().distance_squared_to(&sender_pos))
+                                    .unwrap_or(true)
+                                {
+                                    button = Some(pos);
+                                }
+                            } else if world
+                                .get_block_state(&pos)
+                                .map(|state| Box::<dyn Block>::from(state).id().ends_with("lectern"))
+                                .unwrap_or(false)
+                            {
+                                if lectern
+                                    .map(|l| l.center().distance_squared_to(&sender_pos) > pos.center().distance_squared_to(&sender_pos))
+                                    .unwrap_or(true)
+                                {
+                                    lectern = Some(pos);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if lectern.is_none() && button.is_none() {
+                send_command(bot, format!("msg {sender} Failed to find button and lectern near you!"));
+                return Ok(true);
+            } else if button.is_none() {
+                send_command(bot, format!("msg {sender} Failed to find button near you!"));
+                return Ok(true);
+            } else if lectern.is_none() {
+                send_command(bot, format!("msg {sender} Failed to find lectern near you!"));
+                return Ok(true);
+            }
+            let button = button.unwrap();
+            let lectern = lectern.unwrap();
+
+            if is_add {
+                // Add
+                let name = &args[1];
+                let mut config = stasis.config.lock();
+                if config
+                    .lectern_redcoder_terminals
+                    .iter()
+                    .find(|term| term.id.eq_ignore_ascii_case(name))
+                    .is_some()
+                {
+                    send_command(bot, format!("msg {sender} A terminal with this name does already exist!"));
+                    return Ok(true);
+                }
+
+                if config.lectern_redcoder_terminals.iter().find(|term| term.button == button).is_some() {
+                    send_command(bot, format!("msg {sender} A terminal with this button pos already exists!!"));
+                    return Ok(true);
+                }
+
+                config.lectern_redcoder_terminals.push(LecternRecoderTerminal {
+                    id: name.to_owned(),
+                    button,
+                    lectern,
+                });
+                send_command(bot, format!("msg {sender} Created new terminal with name \"{name}\"!"));
+            } else {
+                // Remove
+                let mut config = stasis.config.lock();
+                if let Some((terminal_index, terminal_name)) = config
+                    .lectern_redcoder_terminals
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, term)| term.button == button && term.lectern == lectern)
+                    .map(|(index, term)| (index, term.id.to_owned()))
+                    .find(|_| true)
+                {
+                    config.lectern_redcoder_terminals.remove(terminal_index);
+                    let mut remove_chamber_indices = Vec::new();
+                    for (chamber_index, chamber) in config.chambers.iter().enumerate() {
+                        match &chamber.definition {
+                            StasisChamberDefinition::RedcoderShay { endpoint, .. } | StasisChamberDefinition::RedcoderTrapdoor { endpoint, .. } => {
+                                if endpoint.lectern_recoder_terminal_id == terminal_name {
+                                    remove_chamber_indices.push(chamber_index);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    for (chamber_index_index, chamber_index) in remove_chamber_indices.iter().enumerate() {
+                        config.chambers.remove(chamber_index - chamber_index_index);
+                    }
+                    send_command(
+                        bot,
+                        format!(
+                            "msg {sender} Removed terminal {terminal_name} and {} associated chambers!",
+                            remove_chamber_indices.len()
+                        ),
+                    );
+                } else {
+                    send_command(bot, format!("msg {sender} No fitting terminal found!"));
+                }
+            }
+            stasis.save_config().await?;
+            Ok(true)
+        }
+        "stasis-rte" => {
+            let stasis = bot_state.stasis.as_ref();
+            if stasis.is_none() {
+                send_command(bot, format!("msg {sender} I'm not allowed to do pearl duties :(..."));
+                return Ok(true);
+            }
+            let stasis = stasis.unwrap();
+
+            let usage = "Usage: <TerminalName> <addShay/addTrapdoor/rm> <Index>";
+            if args.len() < 3 {
+                send_command(bot, format!("msg {sender} {usage}"));
+                return Ok(true);
+            }
+
+            let terminal_name = &args[0];
+            let command = &args[1];
+            let index = args[2].parse::<usize>()?;
+
+            if command.eq_ignore_ascii_case("addShay") || command.eq_ignore_ascii_case("addTrapdoor") {
+                let is_shay = args[1].eq_ignore_ascii_case("addShay");
+                let index = args[2].parse::<usize>()?;
+
+                let mut config = stasis.config.lock();
+                for chamber in &config.chambers {
+                    match &chamber.definition {
+                        StasisChamberDefinition::RedcoderShay { endpoint, .. } | StasisChamberDefinition::RedcoderTrapdoor { endpoint, .. } => {
+                            if &endpoint.lectern_recoder_terminal_id == terminal_name && endpoint.chamber_index == index {
+                                send_command(bot, format!("msg {sender} This chamber already exists!"));
+                                return Ok(true);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                let sender_entity = bot.entity_by::<With<Player>, (&GameProfileComponent,)>(|(profile,): &(&GameProfileComponent,)| profile.name == sender);
+                if sender_entity.is_none() {
+                    send_command(bot, format!("msg {sender} I can't find you!"));
+                    return Ok(true);
+                }
+                let sender_entity = sender_entity.unwrap();
+                let sender_pos = Vec3::from(&bot.entity_component::<Position>(sender_entity));
+
+                if is_shay {
+                    config.chambers.push(StasisChamberEntry {
+                        definition: StasisChamberDefinition::RedcoderShay {
+                            endpoint: LecternRedcoderEndpoint {
+                                lectern_recoder_terminal_id: terminal_name.to_owned(),
+                                chamber_index: index,
+                            },
+                            base_pos: sender_pos.to_block_pos_floor(),
+                        },
+                        occupants: Vec::new(),
+                    });
+                } else {
+                    config.chambers.push(StasisChamberEntry {
+                        definition: StasisChamberDefinition::RedcoderTrapdoor {
+                            endpoint: LecternRedcoderEndpoint {
+                                lectern_recoder_terminal_id: terminal_name.to_owned(),
+                                chamber_index: index,
+                            },
+                            trapdoor_pos: sender_pos.to_block_pos_floor(),
+                        },
+                        occupants: Vec::new(),
+                    });
+                }
+                send_command(bot, format!("msg {sender} Endpoint added!"));
+            } else if command.eq_ignore_ascii_case("rm") {
+                let mut config = stasis.config.lock();
+                let mut remove_chamber_indices = Vec::new();
+                for (chamber_index, chamber) in config.chambers.iter().enumerate() {
+                    match &chamber.definition {
+                        StasisChamberDefinition::RedcoderShay { endpoint, .. } | StasisChamberDefinition::RedcoderTrapdoor { endpoint, .. } => {
+                            if &endpoint.lectern_recoder_terminal_id == terminal_name && endpoint.chamber_index == index {
+                                remove_chamber_indices.push(chamber_index);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                for (chamber_index_index, chamber_index) in remove_chamber_indices.iter().enumerate() {
+                    config.chambers.remove(chamber_index - chamber_index_index);
+                }
+                if remove_chamber_indices.is_empty() {
+                    send_command(bot, format!("msg {sender} Not found!"));
+                    return Ok(true);
+                } else {
+                    send_command(bot, format!("msg {sender} Removed chamber with index {index} on terminal \"{terminal_name}\"!"));
+                }
+            } else {
+                send_command(bot, format!("msg {sender} {usage}"));
+                return Ok(true);
+            }
+            stasis.save_config().await?;
             Ok(true)
         }
         "comehere" => {
@@ -572,13 +815,34 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
             let sender = sender.unwrap();
             info!("Got devnet request to check pearl for {sender} ({for_mc_id}) at destination {destination}");
 
-            let has_trapdoor = stasis.remembered_trapdoor_positions.lock().contains_key(&sender);
+            #[derive(serde::Serialize)]
+            struct DevnetChamberInfo {
+                r#type: &'static str,
+                occupants: Vec<ChamberOccupant>,
+            }
+
+            let mut pearls = vec![];
+            for chamber in &stasis.config.lock().chambers {
+                for occupant in &chamber.occupants {
+                    if occupant.player_uuid == for_mc_id {
+                        pearls.push(DevnetChamberInfo {
+                            r#type: chamber.definition.type_name(),
+                            occupants: chamber.occupants.clone(),
+                        });
+                        break;
+                    }
+                }
+            }
+
             let devnet_tx = DEVNET_TX.lock().clone();
             if let Some(devnet_tx) = devnet_tx {
                 devnet_tx
                     .send(devnet::Message::CheckResponse {
                         for_mc_id,
-                        pearls: if has_trapdoor { vec![serde_json::json!({})] } else { vec![] },
+                        pearls: pearls
+                            .iter()
+                            .map(|info| serde_json::to_value(info))
+                            .collect::<Result<Vec<_>, serde_json::Error>>()?,
                     })
                     .await?;
             }
@@ -609,7 +873,7 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
             let own_username = bot.username();
             let bot = bot.clone();
             stasis
-                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, move |error, message| {
+                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, pearl_index.max(0) as usize, move |error, message| {
                     send_devnet_feedback(&own_username, for_mc_id, error, message)
                 })
                 .context("Pull pearl")?;
@@ -620,7 +884,7 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
 }
 
 pub fn send_devnet_feedback(own_username: impl AsRef<str>, for_mc_id: Uuid, error: bool, message: impl AsRef<str>) {
-    info!("FEEDBACK: {}", message.as_ref());
+    info!("DevNet BotFeedback to {for_mc_id}: {}", message.as_ref());
     let devnet_tx = DEVNET_TX.lock().clone();
     if let Some(devnet_tx) = devnet_tx {
         let message = message.as_ref().to_string();
@@ -639,5 +903,4 @@ pub fn send_devnet_feedback(own_username: impl AsRef<str>, for_mc_id: Uuid, erro
             }
         });
     }
-    info!("FEEDBACK2: {}", message.as_ref());
 }

@@ -1,4 +1,7 @@
-/target
-/remembered-trapdoor-positions.json
-/login-secrets.json
 /.idea/
+/target
+
+# Config files
+/remembered-trapdoor-positions.json*
+/stasis-config.json
+/login-secrets.json

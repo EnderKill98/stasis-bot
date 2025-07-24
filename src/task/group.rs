@@ -7,6 +7,8 @@ use std::fmt::{Display, Formatter};
 pub struct TaskGroup {
     pub name: Option<String>,
     pub subtasks: Vec<Box<dyn Task>>,
+    pub hide_fail: bool,
+
     subtask_index: usize,
     subtask_started: bool,
 }
@@ -16,15 +18,21 @@ impl TaskGroup {
         Self {
             name: None, // == Root
             subtasks: Vec::new(),
+            hide_fail: false,
             subtask_index: 0,
             subtask_started: false,
         }
     }
 
     pub fn new(name: impl AsRef<str>) -> Self {
+        Self::new_with_hide_fail(name, false)
+    }
+
+    pub fn new_with_hide_fail(name: impl AsRef<str>, hide_fail: bool) -> Self {
         Self {
             name: Some(name.as_ref().to_owned()),
             subtasks: Vec::new(),
+            hide_fail,
             subtask_index: 0,
             subtask_started: false,
         }
@@ -182,6 +190,10 @@ impl Task for TaskGroup {
                         self.next_unchecked();
                         return Ok(TaskOutcome::Ongoing);
                     } else {
+                        if self.hide_fail {
+                            warn!("Task {self} failed but pretending to be successful: {reason}");
+                            return Ok(TaskOutcome::Succeeded);
+                        }
                         return Ok(TaskOutcome::Failed {
                             reason: format!("{self} failed: {reason}"),
                         });

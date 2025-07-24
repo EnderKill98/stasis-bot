@@ -21,7 +21,9 @@ impl Module for VisualRangeModule {
 
     async fn handle(&self, bot: Client, event: &Event, _bot_state: &BotState) -> anyhow::Result<()> {
         match event {
+            Event::Login | Event::Disconnect(_) => self.visual_range_cache.lock().clear(),
             Event::Packet(packet) => match packet.as_ref() {
+                ClientboundGamePacket::Respawn(_) => self.visual_range_cache.lock().clear(),
                 ClientboundGamePacket::AddEntity(packet) => {
                     if packet.entity_type == EntityKind::Player {
                         match bot.tab_list().get(&packet.uuid) {

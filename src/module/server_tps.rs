@@ -17,12 +17,12 @@ struct PendingMeasurement {
 }
 
 #[derive(Clone, Default)]
-pub struct ServerTps {
+pub struct ServerTpsModule {
     pending: Arc<Mutex<Option<PendingMeasurement>>>,
     finished: Arc<Mutex<Option<FinishedMeasurement>>>,
 }
 
-impl ServerTps {
+impl ServerTpsModule {
     fn reset(&self) {
         *self.finished.lock() = None;
         *self.pending.lock() = None;
@@ -44,7 +44,7 @@ impl ServerTps {
 }
 
 #[async_trait::async_trait]
-impl Module for ServerTps {
+impl Module for ServerTpsModule {
     fn name(&self) -> &'static str {
         "TpsMeasurement"
     }

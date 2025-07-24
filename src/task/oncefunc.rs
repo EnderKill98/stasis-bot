@@ -40,8 +40,13 @@ where
             && let Some(once_func) = self.once_func.take()
         {
             let display = self.display.to_owned();
-            once_func(bot, bot_state.to_owned()).with_context(|| format!("Running OnceFunc ({display})"))?;
-            Ok(TaskOutcome::Succeeded)
+            if let Err(err) = once_func(bot, bot_state.to_owned()).with_context(|| format!("Running OnceFunc ({display})")) {
+                Ok(TaskOutcome::Failed {
+                    reason: format!("OnceFunc error: {err}"),
+                })
+            } else {
+                Ok(TaskOutcome::Succeeded)
+            }
         } else if self.once_func.is_none() {
             Ok(TaskOutcome::Succeeded)
         } else {

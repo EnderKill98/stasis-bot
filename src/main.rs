@@ -1,3 +1,4 @@
+mod blockpos_string;
 pub mod commands;
 pub mod devnet;
 pub mod module;
@@ -10,9 +11,10 @@ use crate::module::Module;
 use crate::module::autoeat::AutoEatModule;
 use crate::module::devnet_handler::DevNetIntegrationModule;
 use crate::module::emergency_quit::EmergencyQuitModule;
+use crate::module::legacy_stasis::LegacyStasisModule;
 use crate::module::look_at_players::LookAtPlayersModule;
 use crate::module::periodic_swing::PeriodicSwingModule;
-use crate::module::server_tps::ServerTps;
+use crate::module::server_tps::ServerTpsModule;
 use crate::module::soundness::SoundnessModule;
 use crate::module::stasis::StasisModule;
 use crate::module::visual_range::VisualRangeModule;
@@ -391,13 +393,14 @@ pub struct BotState {
 
     auto_eat: Option<AutoEatModule>,
     periodic_swing: Option<PeriodicSwingModule>,
-    stasis: Option<StasisModule>,
+    legacy_stasis: Option<LegacyStasisModule>,
     visual_range: Option<VisualRangeModule>,
     look_at_players: Option<LookAtPlayersModule>,
     soundness: Option<SoundnessModule>,
     emergency_quit: Option<EmergencyQuitModule>,
     devnet_integration: Option<DevNetIntegrationModule>,
-    server_tps: Option<ServerTps>,
+    server_tps: Option<ServerTpsModule>,
+    stasis: Option<StasisModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -413,17 +416,18 @@ impl Default for BotState {
 
             auto_eat: default_if(OPTS.auto_eat),
             periodic_swing: default_if(OPTS.periodic_swing),
-            stasis: if !OPTS.no_stasis {
-                Some(StasisModule::new(!OPTS.no_trapdoor_reopen, OPTS.alternate_trapdoor_goal))
-            } else {
-                None
-            },
+            legacy_stasis: default_if(!OPTS.no_stasis), // Just left to migrate locations, does not do anything anymore
             visual_range: Some(Default::default()),
             look_at_players: OPTS.look_at_players.map(|dist| LookAtPlayersModule::new(dist)),
             soundness: Some(Default::default()),
             emergency_quit: OPTS.emergency_quit.map(|hp| EmergencyQuitModule::new(hp)),
             devnet_integration: default_if(OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some()),
             server_tps: Some(Default::default()),
+            stasis: if !OPTS.no_stasis {
+                Some(StasisModule::new(!OPTS.no_trapdoor_reopen, OPTS.alternate_trapdoor_goal))
+            } else {
+                None
+            },
         }
     }
 }
@@ -437,7 +441,7 @@ impl BotState {
         if let Some(module) = &self.periodic_swing {
             modules.push(module);
         };
-        if let Some(module) = &self.stasis {
+        if let Some(module) = &self.legacy_stasis {
             modules.push(module);
         };
         if let Some(module) = &self.visual_range {
@@ -456,6 +460,9 @@ impl BotState {
             modules.push(module);
         };
         if let Some(module) = &self.server_tps {
+            modules.push(module);
+        };
+        if let Some(module) = &self.stasis {
             modules.push(module);
         };
         modules
@@ -488,7 +495,7 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()
             .await
             .with_context(|| format!("Handling {}", module.name()))?;
     }
-    if let Some(ref module) = bot_state.stasis {
+    if let Some(ref module) = bot_state.legacy_stasis {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
@@ -525,6 +532,12 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()
             .with_context(|| format!("Handling {}", module.name()))?;
     }
     if let Some(ref module) = bot_state.server_tps {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.stasis {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
