@@ -98,10 +98,18 @@ pub async fn execute(bot: &mut Client, bot_state: &BotState, sender: String, mut
                 send_command(bot, format!("msg {sender} I'm not allowed to do pearl duties :(..."));
                 return Ok(true);
             }
+            let chamber_index = if !args.is_empty()
+                && let Ok(parsed_index) = args[0].parse()
+            {
+                parsed_index
+            } else {
+                0
+            };
+
             let stasis = stasis.unwrap();
             let bot = bot.clone();
             stasis
-                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, 0, move |_error, message| {
+                .pull_pearl(&sender.clone(), &bot.clone(), bot_state, chamber_index, move |_error, message| {
                     send_command(&mut bot.clone(), format!("msg {sender} {message}"));
                 })
                 .context("Pull pearl")?;
