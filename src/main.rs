@@ -3,6 +3,7 @@ pub mod commands;
 pub mod devnet;
 pub mod module;
 pub mod task;
+pub mod util;
 
 #[macro_use]
 extern crate tracing;

@@ -1,5 +1,5 @@
-use crate::BotState;
 use crate::task::{Task, TaskOutcome};
+use crate::{BotState, util};
 use anyhow::{anyhow, bail};
 use azalea::blocks::BlockState;
 use azalea::core::direction::Direction;
@@ -55,7 +55,7 @@ impl Task for AffectBlockTask {
             }
         }
 
-        let look_at_block = azalea::direction_looking_at(&Vec3::from(&bot.component::<Position>()), &self.block_pos.center());
+        let look_at_block = azalea::direction_looking_at(&util::own_eye_pos(&bot), &self.block_pos.center());
         *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_at_block;
         Ok(())
     }
