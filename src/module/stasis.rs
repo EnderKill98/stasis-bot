@@ -603,12 +603,15 @@ impl StasisModule {
     ) -> anyhow::Result<()> {
         info!("Pulling chamber {definition:?} for {occupant}...");
 
+        let mut has_null_pearl = false;
         let mut occupying_pearl_uuids = Vec::new();
         for chamber in &self.config.lock().chambers {
             if chamber.definition == definition {
                 for occupant in &chamber.occupants {
                     if let Some(pearl_uuid) = occupant.pearl_uuid {
                         occupying_pearl_uuids.push(pearl_uuid);
+                    } else {
+                        has_null_pearl = true;
                     }
                 }
             }
@@ -652,9 +655,10 @@ impl StasisModule {
                 let (self_clone, self_clone_2, self_clone_3) = (self.clone(), self.clone(), self.clone());
                 let definition_clone = definition.clone();
                 trigger_group.add(OnceFuncTask::new("Check if any pearl exists", move |mut bot, bot_state| {
-                    let any_pearl = bot
-                        .entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(entity_uuid,): &(&EntityUuid,)| occupying_pearl_uuids_clone.contains(entity_uuid))
-                        .is_some();
+                    let any_pearl = has_null_pearl
+                        || bot
+                            .entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(entity_uuid,): &(&EntityUuid,)| occupying_pearl_uuids_clone.contains(entity_uuid))
+                            .is_some();
                     let is_hanging = bot_state.server_tps.map(|server_tps| server_tps.is_server_likely_hanging()).unwrap_or(false);
                     if !any_pearl && !is_hanging {
                         for chamber in &mut self_clone_3.config.lock().chambers {
@@ -769,9 +773,10 @@ impl StasisModule {
                 let (self_clone, self_clone_2, self_clone_3) = (self.clone(), self.clone(), self.clone());
                 let definition_clone = definition.clone();
                 trigger_group.add(OnceFuncTask::new("Check if any pearl exists", move |mut bot, bot_state| {
-                    let any_pearl = bot
-                        .entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(entity_uuid,): &(&EntityUuid,)| occupying_pearl_uuids_clone.contains(entity_uuid))
-                        .is_some();
+                    let any_pearl = has_null_pearl
+                        || bot
+                            .entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(entity_uuid,): &(&EntityUuid,)| occupying_pearl_uuids_clone.contains(entity_uuid))
+                            .is_some();
                     let is_hanging = bot_state.server_tps.map(|server_tps| server_tps.is_server_likely_hanging()).unwrap_or(false);
                     if !any_pearl && !is_hanging {
                         for chamber in &mut self_clone_3.config.lock().chambers {
