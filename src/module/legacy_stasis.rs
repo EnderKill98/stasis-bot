@@ -114,12 +114,14 @@ impl Module for LegacyStasisModule {
                         );
                     }
                 }
-                if self.remembered_trapdoor_positions.lock().len() == 0 && Self::remembered_trapdoor_positions_path().exists() {
-                    info!(
-                        "Legacy trapdoor config is empty! Deleting file {:?}...",
-                        Self::remembered_trapdoor_positions_path()
-                    );
-                    std::fs::remove_file(Self::remembered_trapdoor_positions_path()).ok();
+                if self.remembered_trapdoor_positions.lock().len() == 0 {
+                    if Self::remembered_trapdoor_positions_path().exists() {
+                        info!(
+                            "Legacy trapdoor config is empty! Deleting file {:?}...",
+                            Self::remembered_trapdoor_positions_path()
+                        );
+                        std::fs::remove_file(Self::remembered_trapdoor_positions_path()).ok();
+                    }
                 } else {
                     self.save_stasis().await?;
                 }
