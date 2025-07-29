@@ -4,7 +4,7 @@ use crate::{BotState, util};
 use azalea::entity::metadata::Player;
 use azalea::entity::{EyeHeight, Pose, Position};
 use azalea::world::MinecraftEntityId;
-use azalea::{BotClientExt, Client, Event, Vec3};
+use azalea::{BotClientExt, Client, Event};
 
 #[derive(Clone, Default)]
 pub struct LookAtPlayersModule {
