@@ -114,7 +114,7 @@ impl Module for LegacyStasisModule {
                         );
                     }
                 }
-                if self.remembered_trapdoor_positions.lock().len() == 0 {
+                if self.remembered_trapdoor_positions.lock().len() == 0 && Self::remembered_trapdoor_positions_path().exists() {
                     info!(
                         "Legacy trapdoor config is empty! Deleting file {:?}...",
                         Self::remembered_trapdoor_positions_path()
