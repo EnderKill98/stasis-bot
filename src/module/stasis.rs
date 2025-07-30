@@ -673,7 +673,7 @@ impl StasisModule {
                             }
                         });
                         feedback_clone(
-                            false,
+                            true,
                             "Sorry, but it seems this stasis chamber has no pearls in it! I removed it. Try again to pull the next if you got one.",
                         );
                         bail!("Chamber had no pearls!");
@@ -791,7 +791,7 @@ impl StasisModule {
                             }
                         });
                         feedback_clone(
-                            false,
+                            true,
                             "Sorry, but it seems this redcoder stasis chamber has no pearls in it! I removed it. Try again to pull the next if you got one.",
                         );
                         bail!("Chamber had no pearls!");
@@ -862,7 +862,7 @@ impl StasisModule {
                             }
                         });
                         feedback_clone(
-                            false,
+                            true,
                             "Sorry, but it seems this stasis chamber has no pearls in it! I removed it. Try again to pull the next if you got one.",
                         );
                         bail!("Chamber had no pearls!");
