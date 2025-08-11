@@ -1,6 +1,6 @@
 [package]
 name = "stasis-bot"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
 authors = ["EnderKill98"]
 
@@ -28,7 +28,7 @@ bevy_log = "0.15.2" # Whatever azalea is using
 azalea = { git = "https://github.com/azalea-rs/azalea", rev = "8af265e4", default-features = false, features = [ "log", "serde" ] }
 #azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", branch = "1.21.4" }
 
-parking_lot = "0.12"
+parking_lot = { version = "0.12", features = [ "deadlock_detection" ] }
 
 # Logging
 tracing = "0.1"
@@ -47,3 +47,4 @@ futures-util = "0.3"
 
 async-trait = "0.1"
 chrono = { version = "0.4", features = [ "serde" ] }
+rand = "0.9"

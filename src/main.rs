@@ -1,3 +1,5 @@
+#![feature(error_generic_member_access)]
+
 mod blockpos_string;
 pub mod commands;
 pub mod devnet;
@@ -10,6 +12,7 @@ extern crate tracing;
 
 use crate::module::Module;
 use crate::module::autoeat::AutoEatModule;
+use crate::module::chat::ChatModule;
 use crate::module::devnet_handler::DevNetIntegrationModule;
 use crate::module::emergency_quit::EmergencyQuitModule;
 use crate::module::legacy_stasis::LegacyStasisModule;
@@ -23,6 +26,7 @@ use crate::task::group::TaskGroup;
 use crate::task::{Task, TaskOutcome};
 use anyhow::{Context, Result};
 use azalea::app::PluginGroup;
+use azalea::entity::Position;
 use azalea::swarm::DefaultSwarmPlugins;
 use azalea::task_pool::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use azalea::{
@@ -51,7 +55,6 @@ pub const EXITCODE_CONFLICTING_CLI_OPTS: i32 = 2;
 pub const EXITCODE_AUTH_FAILED: i32 = 3;
 pub const EXITCODE_NO_ACCESS_TOKEN: i32 = 4;
 pub const EXITCODE_PATHFINDER_DEADLOCKED: i32 = 5;
-
 pub const EXITCODE_USER_REQUESTED_STOP: i32 = 20; // Using an error code to prevent automatic relaunching in some configurations or scripts
 pub const EXITCODE_LOW_HEALTH_OR_TOTEM_POP: i32 = 69;
 
@@ -150,9 +153,19 @@ struct Opts {
     #[clap(long)]
     no_trapdoor_reopen: bool,
 
-    /// Changes the type of goal to reach pearls. Use this if reaching your pearl setup has issues
+    /// Allow users to only set a certain amount of pearls
     #[clap(long)]
-    alternate_trapdoor_goal: bool,
+    max_pearls: Option<u32>,
+
+    #[clap(long, default_value = "/msg")]
+    message_command: String,
+
+    #[clap(long)]
+    reply_command: Option<String>,
+
+    /// Attempt to bypass anti-spam measures
+    #[clap(long)]
+    anti_anti_spam: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -243,6 +256,26 @@ async fn async_main() -> Result<()> {
         info!("Logging in...");
     }
 
+    // parking_lot deadlock detection:
+    // Create a background thread which checks for deadlocks every 10s
+    std::thread::Builder::new().name("Deadlock-Checker".to_owned()).spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(30));
+            let deadlocks = parking_lot::deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
+            }
+
+            error!("{} DEADLOCKS DETECTED!!!", deadlocks.len());
+            for (i, threads) in deadlocks.iter().enumerate() {
+                error!("Deadlock #{}", i);
+                for t in threads {
+                    error!("Thread Id {:#?}\n{:#?}", t.thread_id(), t.backtrace());
+                }
+            }
+        }
+    })?;
+
     let mut account = if let Some(offline_username) = &OPTS.offline_username {
         if OPTS.just_print_access_token {
             error!("Can't print an access token for an offline account!");
@@ -258,7 +291,7 @@ async fn async_main() -> Result<()> {
                 std::process::exit(EXITCODE_AUTH_FAILED);
             }
         };
-        azalea::Account {
+        Account {
             username: auth_result.profile.name,
             access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
             uuid: Some(auth_result.profile.id),
@@ -402,6 +435,7 @@ pub struct BotState {
     devnet_integration: Option<DevNetIntegrationModule>,
     server_tps: Option<ServerTpsModule>,
     stasis: Option<StasisModule>,
+    chat: Option<ChatModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -425,10 +459,11 @@ impl Default for BotState {
             devnet_integration: default_if(OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some()),
             server_tps: Some(Default::default()),
             stasis: if !OPTS.no_stasis {
-                Some(StasisModule::new(!OPTS.no_trapdoor_reopen, OPTS.alternate_trapdoor_goal))
+                Some(StasisModule::new(!OPTS.no_trapdoor_reopen, OPTS.max_pearls))
             } else {
                 None
             },
+            chat: Some(ChatModule::default()),
         }
     }
 }
@@ -466,6 +501,9 @@ impl BotState {
         if let Some(module) = &self.stasis {
             modules.push(module);
         };
+        if let Some(module) = &self.chat {
+            modules.push(module);
+        };
         modules
     }
 
@@ -483,7 +521,7 @@ impl BotState {
     }
 }
 
-async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()> {
+async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
     if let Some(ref module) = bot_state.auto_eat {
         module
             .handle(bot.clone(), &event, &bot_state)
@@ -544,124 +582,71 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()
             .await
             .with_context(|| format!("Handling {}", module.name()))?;
     }
+    if let Some(ref module) = bot_state.chat {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
 
     // Process task(s)
     {
         let mut task_root = bot_state.root_task_group.lock();
         if task_root.remaining() > 0 {
-            let mut do_cleanup = false;
-            match task_root.handle(bot.clone(), &bot_state, &event).context("Handling root TaskGroup") {
-                Ok(TaskOutcome::Ongoing) => {}
-                Ok(TaskOutcome::Succeeded) => {
-                    do_cleanup = true;
-                }
-                Ok(TaskOutcome::Failed { reason }) => {
-                    do_cleanup = true;
-                    error!("Task Fail: {reason}");
-                }
-                Err(err) => {
-                    error!("Got error while handling task {task_root}: {err:?}");
-                    bot_state.root_task_last_display.lock().clear();
-                    *task_root = TaskGroup::new_root();
-                }
-            }
-
-            if do_cleanup {
-                info!("All Tasks done ({}).", task_root.subtasks.len());
-                bot_state.root_task_last_display.lock().clear();
+            if bot.get_component::<Position>().is_none() {
+                warn!("Bot has no position associated anymore. Canceling all tasks just in case!");
+                task_root.discard(bot.clone(), &bot_state)?;
                 *task_root = TaskGroup::new_root();
             } else {
-                let mut last_task_display = bot_state.root_task_last_display.lock();
-                let current_task_display = task_root.to_string();
-                if current_task_display != *last_task_display {
-                    info!("Task Status: {current_task_display}");
-                    *last_task_display = current_task_display;
+                let mut do_cleanup = false;
+                match task_root.handle(bot.clone(), &bot_state, &event).context("Handling root TaskGroup") {
+                    Ok(TaskOutcome::Ongoing) => {}
+                    Ok(TaskOutcome::Succeeded) => {
+                        do_cleanup = true;
+                    }
+                    Ok(TaskOutcome::Failed { reason }) => {
+                        do_cleanup = true;
+                        error!("Task Fail: {reason}");
+                    }
+                    Err(err) => {
+                        error!("Got error while handling task {task_root}: {err:?}");
+                        bot_state.root_task_last_display.lock().clear();
+                        *task_root = TaskGroup::new_root();
+                    }
+                }
+
+                if do_cleanup {
+                    info!("All Tasks done ({}).", task_root.subtasks.len());
+                    bot_state.root_task_last_display.lock().clear();
+                    *task_root = TaskGroup::new_root();
+                } else {
+                    let mut last_task_display = bot_state.root_task_last_display.lock();
+                    let current_task_display = task_root.to_string();
+                    if current_task_display != *last_task_display {
+                        info!("Task Status: {current_task_display}");
+                        *last_task_display = current_task_display;
+                    }
                 }
             }
         }
     }
 
     match event {
-        Event::Chat(packet) => {
-            info!(
-                "CHAT: {}",
-                if OPTS.no_color {
-                    packet.message().to_string()
-                } else {
-                    packet.message().to_ansi()
-                }
-            );
-            let message = packet.message().to_string();
-
-            // Very security and sane way to find out, if message was a dm to self.
-            // Surely no way to cheese it..
-            let mut dm = None;
-            if message.starts_with('[') && message.contains("-> me] ") {
-                // Common format used by Essentials and other custom plugins: [Someone -> me] Message
-                dm = Some((
-                    message.split(" ").next().unwrap()[1..].to_owned(),
-                    message.split("-> me] ").collect::<Vec<_>>()[1].to_owned(),
-                ));
-            } else if message.contains(" whispers to you: ") {
-                // Vanilla minecraft: Someone whispers to you: Message
-                dm = Some((
-                    message.split(" ").next().unwrap().to_owned(),
-                    message.split("whispers to you: ").collect::<Vec<_>>()[1].to_owned(),
-                ));
-            } else if message.contains(" whispers: ") {
-                // Used on 2b2t: Someone whispers: Message
-                let sender = message.split(" ").next().unwrap().to_owned();
-                let mut message = message.split(" whispers: ").collect::<Vec<_>>()[1].to_owned();
-                if message.ends_with(&sender) {
-                    message = message[..(message.len() - sender.len())].to_owned();
-                }
-                dm = Some((sender, message));
-            }
-
-            if let Some((sender, content)) = dm {
-                let (command, args) = if content.contains(' ') {
-                    let mut all_args: Vec<_> = content.split(' ').map(|s| s.to_owned()).collect();
-                    let command = all_args.remove(0);
-                    (command, all_args)
-                } else {
-                    (content, vec![])
-                };
-
-                if bot_state
-                    .last_dm_handled_at
-                    .lock()
-                    .map(|at| at.elapsed() > Duration::from_secs(1))
-                    .unwrap_or(true)
-                {
-                    info!("Executing command {command:?} sent by {sender:?} with args {args:?}");
-                    match commands::execute(&mut bot, &bot_state, sender.clone(), command, args).await {
-                        Ok(executed) => {
-                            if executed {
-                                *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            } else {
-                                warn!("Command was not executed. Most likely an unknown command.");
-                            }
-                        }
-                        Err(err) => {
-                            commands::send_command(&mut bot, &format!("msg {sender} Oops: {err}"));
-                        }
-                    }
-                } else {
-                    warn!("Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked.");
-                }
-            }
-        }
         Event::Tick => {
             // Execute commands from input queue
             {
                 let mut queue = INPUTLINE_QUEUE.lock();
                 while let Some(line) = queue.pop_front() {
-                    if line.starts_with("/") {
-                        info!("Sending command: {line}");
-                        bot.send_command_packet(&format!("{}", &line[1..]));
+                    if let Some(chat) = bot_state.chat.as_ref() {
+                        chat.chat(line);
                     } else {
-                        info!("Sending chat message: {line}");
-                        bot.send_chat_packet(&line);
+                        if line.starts_with("/") {
+                            info!("Sending command: {line}");
+                            bot.send_command_packet(&format!("{}", &line[1..]));
+                        } else {
+                            info!("Sending chat message: {line}");
+                            bot.send_chat_packet(&line);
+                        }
                     }
                 }
             }

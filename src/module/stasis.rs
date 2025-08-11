@@ -1,5 +1,7 @@
+use crate::blockpos_string;
 use crate::module::Module;
 use crate::task::affect_block::AffectBlockTask;
+use crate::task::close_inventory_and_sync::CloseInventoryAndSyncTask;
 use crate::task::delay_ticks::DelayTicksTask;
 use crate::task::group::TaskGroup;
 use crate::task::oncefunc::OnceFuncTask;
@@ -7,19 +9,20 @@ use crate::task::open_container_block::OpenContainerBlockTask;
 use crate::task::pathfind;
 use crate::task::pathfind::{BoxedPathfindGoal, PathfindTask};
 use crate::task::wait_for_block_unpower::WaitForBlockUnpowerTask;
+use crate::util::InteractableGoal;
 use crate::{BotState, OPTS};
-use crate::{blockpos_string, commands};
 use anyhow::{Context, anyhow, bail};
 use azalea::blocks::Block;
 use azalea::blocks::properties::Open;
 use azalea::ecs::entity::Entity;
 use azalea::ecs::prelude::With;
 use azalea::entity::metadata::{EnderPearl, Player};
-use azalea::entity::{EntityUuid, Position};
+use azalea::entity::{EntityDataValue, EntityUuid, Position};
 use azalea::inventory::Inventory;
 use azalea::packet::game::SendPacketEvent;
 use azalea::pathfinder::goals;
-use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundContainerButtonClick, ServerboundContainerClose, ServerboundGamePacket};
+use azalea::protocol::packets::game::c_animate::AnimationAction;
+use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundContainerButtonClick, ServerboundGamePacket};
 use azalea::registry::EntityKind;
 use azalea::world::MinecraftEntityId;
 use azalea::{BlockPos, Client, Event, GameProfileComponent, Vec3};
@@ -29,6 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Add;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -76,6 +80,13 @@ pub enum StasisChamberDefinition {
         #[serde(with = "blockpos_string")]
         trigger_pos: BlockPos,
     },
+    RedstoneDoubleTrigger {
+        #[serde(with = "blockpos_string")]
+        base_pos: BlockPos,
+        #[serde(with = "blockpos_string")]
+        trigger_pos: BlockPos,
+        delay_ticks: u32,
+    },
 }
 
 impl StasisChamberDefinition {
@@ -86,6 +97,21 @@ impl StasisChamberDefinition {
             Self::RedcoderTrapdoor { .. } => "RedcoderTrapdoor",
             Self::RedcoderShay { .. } => "RedcoderShay",
             Self::RedstoneSingleTrigger { .. } => "RedstoneSingleTrigger",
+            Self::RedstoneDoubleTrigger { .. } => "RedstoneDoubleTrigger",
+        }
+    }
+
+    pub fn rough_pos(&self) -> BlockPos {
+        match self {
+            StasisChamberDefinition::RedcoderTrapdoor { trapdoor_pos: rough_pos, .. }
+            | StasisChamberDefinition::RedcoderShay { base_pos: rough_pos, .. }
+            | StasisChamberDefinition::FlippableTrapdoor { trapdoor_pos: rough_pos, .. }
+            | StasisChamberDefinition::SecuredFlippableTrapdoor {
+                trigger_trapdoor_pos: rough_pos,
+                ..
+            }
+            | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: rough_pos, .. }
+            | StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: rough_pos, .. } => *rough_pos,
         }
     }
 }
@@ -93,7 +119,7 @@ impl StasisChamberDefinition {
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ChamberOccupant {
     pub thrown_at: chrono::DateTime<chrono::Local>,
-    pub player_uuid: Uuid,
+    pub player_uuid: Option<Uuid>,
     pub pearl_uuid: Option<Uuid>,
 }
 
@@ -112,26 +138,39 @@ pub struct StasisConfig {
 #[derive(Clone)]
 pub struct StasisModule {
     pub do_reopen_trapdoor: bool,
-    pub alternate_trapdoor_goal: bool,
+    pub max_pearls: Option<u32>,
 
     pub config: Arc<Mutex<StasisConfig>>,
     pub last_idle_pos: Arc<Mutex<Option<BlockPos>>>,
     spawned_pearl_uuids: Arc<Mutex<HashMap<MinecraftEntityId, EntityUuid>>>,
     //missing_pearl_counter: Arc<Mutex<HashMap<Uuid /*PearlUuid*/, usize>>>,
     expect_despawn_of: Arc<Mutex<HashSet<Uuid /*PearlUuid*/>>>,
+    remove_occupant_if_player_gets_near: Arc<
+        Mutex<
+            Vec<(
+                Uuid,     /*PearlUuid*/
+                BlockPos, /*ChamberPos*/
+                Uuid,     /*Player*/
+                Instant,  /*Until*/
+            )>,
+        >,
+    >,
+    pub mass_adding: Arc<Mutex<HashMap<Uuid /*PlayerUuid*/, (String /*LecternRedcoderTerminalId*/, bool /*IsShay*/, usize /*Next index*/)>>>,
 }
 
 impl StasisModule {
-    pub fn new(do_reopen_trapdoor: bool, alternate_trapdoor_goal: bool) -> Self {
+    pub fn new(do_reopen_trapdoor: bool, max_pearls: Option<u32>) -> Self {
         Self {
             do_reopen_trapdoor,
-            alternate_trapdoor_goal,
+            max_pearls,
 
             config: Default::default(),
             last_idle_pos: Default::default(),
             spawned_pearl_uuids: Default::default(),
             //missing_pearl_counter: Default::default(),
             expect_despawn_of: Default::default(),
+            remove_occupant_if_player_gets_near: Default::default(),
+            mass_adding: Default::default(),
         }
     }
 
@@ -187,18 +226,13 @@ impl StasisModule {
         }
     }
 
-    fn current_block_pos(bot: &mut Client) -> BlockPos {
-        let pos = bot.entity_component::<Position>(bot.entity);
-        BlockPos {
-            x: pos.x.floor() as i32,
-            y: pos.y.floor() as i32,
-            z: pos.z.floor() as i32,
-        }
+    fn current_block_pos(bot: &mut Client) -> Option<BlockPos> {
+        bot.get_entity_component::<Position>(bot.entity).map(|pos| pos.to_block_pos_floor())
     }
 
-    pub fn return_pos(&self, bot: &mut Client) -> BlockPos {
+    pub fn return_pos(&self, bot: &mut Client) -> Option<BlockPos> {
         if let Some(last_idle_pos) = self.last_idle_pos.lock().as_ref() {
-            last_idle_pos.clone()
+            Some(last_idle_pos.clone())
         } else {
             Self::current_block_pos(bot)
         }
@@ -210,7 +244,7 @@ impl StasisModule {
     }
 
     pub fn update_idle_pos(&self, bot: &mut Client) {
-        *self.last_idle_pos.lock() = Some(Self::current_block_pos(bot));
+        *self.last_idle_pos.lock() = Self::current_block_pos(bot);
     }
 
     pub fn chamber_for_pearl_pos<'a>(bot: &mut Client, config: &'a mut StasisConfig, pearl_pos: Vec3) -> Option<&'a mut StasisChamberEntry> {
@@ -318,38 +352,24 @@ impl StasisModule {
 
                     let mut remove_chambers_indices = Vec::new();
                     for (chamber_index, chamber) in config.chambers.iter().enumerate() {
-                        match chamber.definition {
-                            StasisChamberDefinition::RedcoderTrapdoor {
-                                trapdoor_pos: existing_pos, ..
-                            }
-                            | StasisChamberDefinition::RedcoderShay { base_pos: existing_pos, .. }
-                            | StasisChamberDefinition::FlippableTrapdoor {
-                                trapdoor_pos: existing_pos, ..
-                            }
-                            | StasisChamberDefinition::SecuredFlippableTrapdoor {
-                                trigger_trapdoor_pos: existing_pos,
-                                ..
-                            }
-                            | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: existing_pos, .. } => {
-                                if chamber.definition != definition
-                                    && existing_pos.x == rough_pos.x
-                                    && existing_pos.z == rough_pos.z
-                                    && (rough_pos.y - existing_pos.y).abs() <= 5
-                                {
-                                    warn!(
-                                        "Detected an existing close chamber definition ({}) where new one ({}) is supposed to be at roughly {rough_pos}!",
-                                        chamber.definition.type_name(),
-                                        definition.type_name()
-                                    );
-                                    match chamber.definition {
-                                        StasisChamberDefinition::FlippableTrapdoor { .. } | StasisChamberDefinition::SecuredFlippableTrapdoor { .. } => {
-                                            warn!("Removing old definition (assuming trapdoors moved)!");
-                                            remove_chambers_indices.push(chamber_index);
-                                        }
-                                        _ => {
-                                            return None;
-                                        }
-                                    }
+                        let rough_pos = chamber.definition.rough_pos();
+                        if chamber.definition != definition
+                            && rough_pos.x == rough_pos.x
+                            && rough_pos.z == rough_pos.z
+                            && (rough_pos.y - rough_pos.y).abs() <= 5
+                        {
+                            warn!(
+                                "Detected an existing close chamber definition ({}) where new one ({}) is supposed to be at roughly {rough_pos}!",
+                                chamber.definition.type_name(),
+                                definition.type_name()
+                            );
+                            match chamber.definition {
+                                StasisChamberDefinition::FlippableTrapdoor { .. } | StasisChamberDefinition::SecuredFlippableTrapdoor { .. } => {
+                                    warn!("Removing old definition (assuming trapdoors moved)!");
+                                    remove_chambers_indices.push(chamber_index);
+                                }
+                                _ => {
+                                    return None;
                                 }
                             }
                         }
@@ -386,8 +406,9 @@ impl StasisModule {
                 | StasisChamberDefinition::RedcoderTrapdoor {
                     trapdoor_pos: existing_pos, ..
                 }
-                | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: existing_pos, .. } => {
-                    if existing_pos.x == pearl_block_pos.x && existing_pos.z == pearl_block_pos.z && (pearl_block_pos.y - existing_pos.y).abs() <= 5 {
+                | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: existing_pos, .. }
+                | StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: existing_pos, .. } => {
+                    if existing_pos.x == pearl_block_pos.x && existing_pos.z == pearl_block_pos.z && (pearl_block_pos.y - existing_pos.y).abs() <= 8 {
                         info!("Found existing chamber definition ({}) at {existing_pos}.", chamber.definition.type_name());
                         return Some(chamber);
                     }
@@ -402,6 +423,7 @@ impl StasisModule {
     pub fn on_pearl_throw(
         &self,
         bot: &mut Client,
+        bot_state: &BotState,
         _player: Entity,
         player_name: &str,
         player_uuid: Uuid,
@@ -411,8 +433,8 @@ impl StasisModule {
         _pearl_id: MinecraftEntityId,
     ) {
         for chamber in &self.config.lock().chambers {
-            if chamber.occupants.iter().find(|occupant| occupant.pearl_uuid == Some(pearl_uuid)).is_some() {
-                trace!("Pearl {pearl_uuid} is already noted as an occupant.");
+            if chamber.occupants.iter().any(|occupant| occupant.pearl_uuid == Some(pearl_uuid)) {
+                trace!("Pearl {pearl_uuid} (at {pearl_pos}) is already noted as an occupant.");
                 return;
             }
         }
@@ -435,10 +457,11 @@ impl StasisModule {
         let mut owned_by_other = false;
         let was_occupants_empty = chamber.occupants.is_empty();
         for occupant in &chamber.occupants {
-            if occupant.player_uuid != player_uuid {
+            if let Some(oc_player_uuid) = occupant.player_uuid
+                && oc_player_uuid != player_uuid
+            {
                 warn!(
-                    "Player {player_name} ({player_uuid}) threw a pearl into a chamber that had a pearl registed which was owned by another player with uuid {}! Clearing old occupants, but this is rude!",
-                    occupant.player_uuid
+                    "Player {player_name} ({player_uuid}) threw a pearl into a chamber that had a pearl registed which was owned by another player with uuid {oc_player_uuid}! Clearing old occupants, but this is rude!",
                 );
                 owned_by_other = true;
             }
@@ -447,16 +470,42 @@ impl StasisModule {
             chamber.occupants.clear();
         }
         chamber.occupants.push(ChamberOccupant {
-            player_uuid,
+            player_uuid: Some(player_uuid),
             pearl_uuid: Some(pearl_uuid),
             thrown_at: chrono::Local::now(),
         });
         let chamber_definition = chamber.definition.clone();
+        drop(config);
+        let chambers_ordered = self.get_ordered_chambers(player_uuid);
         if was_occupants_empty {
-            commands::send_command(bot, format!("msg {player_name} You have thrown a pearl. Message me !tp to get back here."));
+            if let Some(chat) = &bot_state.chat {
+                if let Some(max_pearls) = self.max_pearls {
+                    let further_allowed = max_pearls as i32 - chambers_ordered.len() as i32;
+                    if further_allowed == 1 {
+                        chat.msg(
+                            player_name,
+                            "You have thrown a pearl. Message me !tp to get back here (you are allowed to throw ONE MORE PEARL).",
+                        );
+                    } else if further_allowed == 0 {
+                        chat.msg(
+                            player_name,
+                            format!(
+                                "You have thrown a pearl. Message me !tp to get back here. You used up all your existing chambers ({max_pearls}). Please don't throw any further pearls!",
+
+                            ),
+                        );
+                    } else {
+                        chat.msg(
+                            player_name,
+                            format!("You have thrown a pearl. Message me !tp to get back here (you are allowed to throw {further_allowed} more pearls)."),
+                        );
+                    }
+                } else {
+                    chat.msg(player_name, "You have thrown a pearl. Message me !tp to get back here.");
+                }
+            }
         }
 
-        drop(config);
         let self_clone = self.clone();
         tokio::spawn(async move {
             if let Err(err) = self_clone.save_config().await {
@@ -468,6 +517,32 @@ impl StasisModule {
             "{player_name} threw an EnderPearl ({pearl_uuid}) at {player_pos} (chamber type: {}) and was saved to config!",
             chamber_definition.type_name()
         );
+
+        // Check if player has too many pearls
+        if let Some(max_pearls) = self.max_pearls {
+            if chambers_ordered.len() > max_pearls as usize {
+                info!(
+                    "Detected that {player_name} (uuid: {player_uuid} has too many pearls ({} > {max_pearls}). Pulling some...",
+                    chambers_ordered.len(),
+                );
+                if let Some(chat) = &bot_state.chat {
+                    chat.msg(
+                        player_name,
+                        format!(
+                            "Sorry, but your amount of chambers ({}) exceeds the allowed limit ({max_pearls}). Pulling your old pearls, hang on...",
+                            chambers_ordered.len(),
+                        ),
+                    );
+                    let player_name_clone = player_name.to_owned();
+                    let feedback = Arc::new(move |_error: bool, message: &str| debug!("Ignored feedback to {player_name_clone}: {message}"));
+                    for def in chambers_ordered[max_pearls as usize..].iter().rev() {
+                        if let Err(err) = self.pull_chamber(player_name, def.clone(), bot, bot_state, feedback.clone()) {
+                            error!("Could not pull a chamber of {player_name}: {err:?}");
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /*
@@ -513,30 +588,13 @@ impl StasisModule {
         }
     }*/
 
-    pub fn pull_pearl<F: Fn(/*error*/ bool, &str) + Send + Sync + 'static>(
-        &self,
-        username: &str,
-        bot: &Client,
-        bot_state: &BotState,
-        mut chamber_index: usize,
-        feedback: F,
-    ) -> anyhow::Result<()> {
-        let username = username.to_owned();
-        let uuid = bot.tab_list().iter().find(|(_, i)| i.profile.name == username).map(|(_, i)| i.profile.uuid);
-        if uuid.is_none() {
-            feedback(true, &format!("Could not find UUID for username {username}"));
-            return Ok(());
-        }
-        let uuid = uuid.unwrap();
-
+    pub fn get_ordered_chambers(&self, player_uuid: Uuid) -> Vec<StasisChamberDefinition> {
         let mut owned_chambers_with_times = HashMap::new();
-        //let mut definition = None;
-        //let mut definition_newest_time = None;
         // Find definition of chamber with newest thrown pearl
         for chamber in &self.config.lock().chambers {
             let mut newest_time_from_player = None;
             for occupant in &chamber.occupants {
-                if occupant.player_uuid == uuid {
+                if occupant.player_uuid == Some(player_uuid) {
                     if newest_time_from_player
                         .as_ref()
                         .map(|other_time| &occupant.thrown_at > other_time)
@@ -554,6 +612,25 @@ impl StasisModule {
 
         let mut chambers_ordered: Vec<StasisChamberDefinition> = owned_chambers_with_times.keys().map(|def| def.clone()).collect();
         chambers_ordered.sort_by(|a, b| owned_chambers_with_times[&b].cmp(&owned_chambers_with_times[&a]));
+        chambers_ordered
+    }
+
+    pub fn pull_pearl<F: Fn(/*error*/ bool, &str) + Send + Sync + 'static>(
+        &self,
+        username: &str,
+        bot: &mut Client,
+        bot_state: &BotState,
+        mut chamber_index: usize,
+        feedback: F,
+    ) -> anyhow::Result<()> {
+        let username = username.to_owned();
+        let uuid = bot.tab_list().iter().find(|(_, i)| i.profile.name == username).map(|(_, i)| i.profile.uuid);
+        if uuid.is_none() {
+            feedback(true, &format!("Could not find UUID for username {username}"));
+            return Ok(());
+        }
+        let uuid = uuid.unwrap();
+        let chambers_ordered = self.get_ordered_chambers(uuid);
 
         if chambers_ordered.is_empty() {
             feedback(true, "No chamber found!");
@@ -563,19 +640,27 @@ impl StasisModule {
         if chamber_index >= chambers_ordered.len() {
             chamber_index = chambers_ordered.len() - 1;
         }
-        let definition = chambers_ordered.remove(chamber_index);
+        let definition = chambers_ordered.get(chamber_index).unwrap().clone();
 
         if bot_state.tasks() > 0 {
             feedback(false, "Hang on, will walk to your stasis chamber in due time...");
         } else {
-            feedback(false, &format!("Pulling your stasis chamber... (you got {})", owned_chambers_with_times.len()));
+            feedback(false, &format!("Pulling your stasis chamber... (you got {})", chambers_ordered.len()));
         }
 
-        self.pull_chamber(&username, definition, &bot, &bot_state, Arc::new(feedback))?;
+        self.pull_chamber(&username, definition, bot, &bot_state, Arc::new(feedback))?;
         Ok(())
     }
 
-    pub fn remove_occupants_with_no_pearl_uuid(&self, definition: &StasisChamberDefinition) {
+    pub fn remove_uncertain_occupants(
+        &self,
+        bot: &mut Client,
+        definition: &StasisChamberDefinition,
+        with_no_pearl_uuid: bool,
+        with_no_player_uuid: bool,
+        pearl_not_found: bool,
+    ) {
+        let mut config_changed = false;
         for chamber in &mut self.config.lock().chambers {
             if &chamber.definition != definition {
                 continue;
@@ -583,13 +668,32 @@ impl StasisModule {
 
             let mut remove_occupant_indices = Vec::new();
             for (occupant_index, occupant) in &mut chamber.occupants.iter().enumerate() {
-                if occupant.pearl_uuid.is_none() {
+                if with_no_pearl_uuid && occupant.pearl_uuid.is_none() {
+                    remove_occupant_indices.push(occupant_index);
+                    warn!("Removing uncertain occupant preemptively (no pearl uuid, likely migrated from legacy chamber): {occupant:?}");
+                } else if with_no_player_uuid && occupant.player_uuid.is_none() {
+                    remove_occupant_indices.push(occupant_index);
+                    warn!("Remove uncertain occupant preemptively (no player uuid, likely thrown while offline): {occupant:?}");
+                } else if pearl_not_found && let Some(pearl_uuid) = occupant.pearl_uuid
+                    && definition.rough_pos().center().horizontal_distance_squared_to(&Vec3::from(&bot.component::<Position>())) <= 58f64.powi(2) /*In range by ~6 blocks */
+                    && bot.entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(uuid,): &(&EntityUuid,)| pearl_uuid == ***uuid).is_none()
+                {
+                    warn!("Remove uncertain occupant preemptively (pearl not found by uuid, likely despawned while offline): {occupant:?}");
                     remove_occupant_indices.push(occupant_index);
                 }
             }
             for (occupant_index_index, occupant_index) in remove_occupant_indices.into_iter().enumerate() {
                 chamber.occupants.remove(occupant_index - occupant_index_index);
+                config_changed = true;
             }
+        }
+        if config_changed {
+            let self_clone = self.clone();
+            tokio::task::spawn(async move {
+                if let Err(err) = self_clone.save_config().await {
+                    error!("Failed to save stasis-config: {err:?}");
+                }
+            });
         }
     }
 
@@ -597,7 +701,7 @@ impl StasisModule {
         &self,
         occupant: &str,
         definition: StasisChamberDefinition,
-        bot: &Client,
+        bot: &mut Client,
         bot_state: &BotState,
         feedback: Arc<F>,
     ) -> anyhow::Result<()> {
@@ -623,18 +727,8 @@ impl StasisModule {
                 trigger_trapdoor_pos: trapdoor_pos,
                 ..
             } => {
-                let trapdoor_goal: Arc<BoxedPathfindGoal> = if self.alternate_trapdoor_goal {
-                    Arc::new(BoxedPathfindGoal::new(goals::RadiusGoal {
-                        pos: trapdoor_pos.center(),
-                        radius: 3.0,
-                    }))
-                } else {
-                    Arc::new(BoxedPathfindGoal::new(goals::ReachBlockPosGoal {
-                        pos: trapdoor_pos.to_owned(),
-                        chunk_storage: bot.world().read().chunks.clone(),
-                    }))
-                };
-                let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()));
+                let trapdoor_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(InteractableGoal::new(trapdoor_pos)));
+                let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()).expect("No return pos"));
                 let greeting = format!("Welcome back, {occupant}!");
 
                 let mut group = TaskGroup::new(format!("Pull {occupant}'s chamber"));
@@ -680,6 +774,7 @@ impl StasisModule {
                     }
                     Ok(())
                 }));
+                let mut bot_clone = bot.clone();
                 trigger_group = trigger_group
                     .with(OnceFuncTask::new("Add expected despawning pearls", move |_bot, _bot_state| {
                         let mut expect_despawn_of = self_clone.expect_despawn_of.lock();
@@ -693,8 +788,8 @@ impl StasisModule {
                         feedback(false, &greeting);
                         Ok(())
                     }))
-                    .with(OnceFuncTask::new("Clean unknown pearls", move |_bot, _bot_state| {
-                        self_clone_2.remove_occupants_with_no_pearl_uuid(&definition);
+                    .with(OnceFuncTask::new("Clean uncertain pearls", move |_bot, _bot_state| {
+                        self_clone_2.remove_uncertain_occupants(&mut bot_clone, &definition, true, true, true);
                         Ok(())
                     }));
 
@@ -729,15 +824,9 @@ impl StasisModule {
                 }
                 let terminal = terminal.unwrap();
 
-                let lectern_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(goals::ReachBlockPosGoal {
-                    pos: terminal.lectern,
-                    chunk_storage: bot.world().read().chunks.clone(),
-                }));
-                let button_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(goals::ReachBlockPosGoal {
-                    pos: terminal.button,
-                    chunk_storage: bot.world().read().chunks.clone(),
-                }));
-                let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()));
+                let lectern_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(InteractableGoal::new(terminal.lectern)));
+                let button_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(InteractableGoal::new(terminal.button)));
+                let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()).expect("No return pos"));
 
                 let greeting = format!("Welcome back, {occupant}!");
 
@@ -759,12 +848,11 @@ impl StasisModule {
                                 button_id: 101 + endpoint.chamber_index as u32,
                             }),
                         });
-                        ecs.send_event(SendPacketEvent {
-                            sent_by,
-                            packet: ServerboundGamePacket::ContainerClose(ServerboundContainerClose { container_id: inv.id }),
-                        });
+                        // Do not use anything that sends a ContainerCloseEvent after this!
+                        // It somehow breaks the page selection (probably weird event order)!
                         Ok(())
-                    }));
+                    }))
+                    .with(CloseInventoryAndSyncTask::default());
 
                 let mut trigger_group = TaskGroup::new_with_hide_fail("Check and trigger", true);
 
@@ -798,6 +886,7 @@ impl StasisModule {
                     }
                     Ok(())
                 }));
+                let mut bot_clone = bot.clone();
                 trigger_group = trigger_group
                     .with(OnceFuncTask::new("Add expected despawning pearls", move |_bot, _bot_state| {
                         let mut expect_despawn_of = self_clone.expect_despawn_of.lock();
@@ -813,8 +902,8 @@ impl StasisModule {
                         feedback(false, &greeting);
                         Ok(())
                     }))
-                    .with(OnceFuncTask::new("Clean unknown pearls", move |_bot, _bot_state| {
-                        self_clone_2.remove_occupants_with_no_pearl_uuid(&definition);
+                    .with(OnceFuncTask::new("Clean uncertain pearls", move |_bot, _bot_state| {
+                        self_clone_2.remove_uncertain_occupants(&mut bot_clone, &definition, true, true, true);
                         Ok(())
                     }));
 
@@ -823,12 +912,9 @@ impl StasisModule {
 
                 bot_state.add_task(group);
             }
-            StasisChamberDefinition::RedstoneSingleTrigger { trigger_pos, .. } => {
-                let trapdoor_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(goals::ReachBlockPosGoal {
-                    pos: trigger_pos.to_owned(),
-                    chunk_storage: bot.world().read().chunks.clone(),
-                }));
-                let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()));
+            StasisChamberDefinition::RedstoneSingleTrigger { trigger_pos, .. } | StasisChamberDefinition::RedstoneDoubleTrigger { trigger_pos, .. } => {
+                let trapdoor_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(InteractableGoal::new(trigger_pos.to_owned())));
+                let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()).expect("No return pos"));
                 let greeting = format!("Welcome back, {occupant}!");
 
                 let mut group = TaskGroup::new(format!("Pull {occupant}'s chamber"));
@@ -877,13 +963,21 @@ impl StasisModule {
                         });
                         Ok(())
                     }))
-                    .with(AffectBlockTask::new(trigger_pos))
+                    .with(AffectBlockTask::new(trigger_pos));
+
+                if let StasisChamberDefinition::RedstoneDoubleTrigger { delay_ticks, .. } = definition {
+                    trigger_group.add(DelayTicksTask::new(delay_ticks));
+                    trigger_group.add(AffectBlockTask::new(trigger_pos));
+                }
+
+                let mut bot_clone = bot.clone();
+                trigger_group = trigger_group
                     .with(OnceFuncTask::new(format!("Greet {occupant}"), move |_bot, _bot_state| {
                         feedback(false, &greeting);
                         Ok(())
                     }))
-                    .with(OnceFuncTask::new("Clean unknown pearls", move |_bot, _bot_state| {
-                        self_clone_2.remove_occupants_with_no_pearl_uuid(&definition);
+                    .with(OnceFuncTask::new("Clean uncertain pearls", move |_bot, _bot_state| {
+                        self_clone_2.remove_uncertain_occupants(&mut bot_clone, &definition, true, true, true);
                         Ok(())
                     }));
 
@@ -894,6 +988,65 @@ impl StasisModule {
             }
         }
         Ok(())
+    }
+
+    pub fn check_occupants_near_despawned_pearls(&self, bot: &mut Client) {
+        let mut remove_indices: Vec<usize> = Vec::with_capacity(0);
+        let mut remove_pearl_uuids: HashSet<Uuid> = HashSet::with_capacity(0);
+        let mut remove_occupant_if_player_gets_near = self.remove_occupant_if_player_gets_near.lock();
+
+        for (index, (pearl_uuid, chamber_pos, player_uuid, until)) in remove_occupant_if_player_gets_near.iter().enumerate() {
+            let player_entity = bot.entity_by::<With<Player>, (&GameProfileComponent,)>(|(profile,): &(&GameProfileComponent,)| &profile.uuid == player_uuid);
+            if until <= &Instant::now() {
+                remove_indices.push(index);
+                continue;
+            }
+            if let Some(player_entity) = player_entity
+                && let Some(player_pos) = bot.get_entity_component::<Position>(player_entity)
+            {
+                let own_pos = bot.component::<Position>();
+                if player_pos.horizontal_distance_squared_to(&chamber_pos.center()) <= 2.5f64.powi(2)
+                    && own_pos.horizontal_distance_squared_to(&chamber_pos.center()) <= 56.0f64.powi(2)
+                {
+                    info!(
+                        "Pearl {} likely was removed when teleporting the owner ({}) to it (owner came back later). Removing it.",
+                        *pearl_uuid, player_uuid
+                    );
+                    remove_indices.push(index);
+                    remove_pearl_uuids.insert(*pearl_uuid);
+                }
+            }
+        }
+
+        for (occupant_index_index, occupant_index) in remove_indices.into_iter().enumerate() {
+            remove_occupant_if_player_gets_near.remove(occupant_index - occupant_index_index);
+        }
+
+        if !remove_pearl_uuids.is_empty() {
+            let mut config_changed = false;
+            for chamber in &mut self.config.lock().chambers {
+                let mut remove_occupant_indices = Vec::with_capacity(0);
+                for (occupant_index, occupant) in chamber.occupants.iter().enumerate() {
+                    if let Some(ref pearl_uuid) = occupant.pearl_uuid
+                        && remove_pearl_uuids.contains(pearl_uuid)
+                    {
+                        remove_occupant_indices.push(occupant_index);
+                    }
+                }
+                for (occupant_index_index, occupant_index) in remove_occupant_indices.into_iter().enumerate() {
+                    chamber.occupants.remove(occupant_index - occupant_index_index);
+                    config_changed = true;
+                }
+            }
+            if config_changed {
+                let self_clone = self.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = self_clone.save_config().await {
+                        error!("Failed to save stasis-config: {err:?}");
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -945,6 +1098,7 @@ impl Module for StasisModule {
                             let player_pos = bot.entity_component::<Position>(player_entity);
                             self.on_pearl_throw(
                                 &mut bot,
+                                bot_state,
                                 player_entity,
                                 &game_profile.name,
                                 game_profile.uuid,
@@ -953,7 +1107,40 @@ impl Module for StasisModule {
                                 packet.position,
                                 packet.id,
                             );
+                        } else {
+                            let pearl_uuid = packet.uuid;
+                            let pearl_pos = packet.position;
+                            let mut config = self.config.lock();
+                            for chamber in &config.chambers {
+                                if chamber.occupants.iter().any(|occupant| occupant.pearl_uuid == Some(pearl_uuid)) {
+                                    return Ok(()); // Known pearl
+                                }
+                            }
+
+                            if let Some(chamber) = Self::chamber_for_pearl_pos(&mut bot, &mut config, pearl_pos) {
+                                chamber.occupants.push(ChamberOccupant {
+                                    pearl_uuid: Some(pearl_uuid),
+                                    player_uuid: None,
+                                    thrown_at: chrono::Local::now(),
+                                });
+                                warn!(
+                                    "Detected new Pearl ({pearl_uuid} at {pearl_pos}) with no known owning player (owner id: {owning_player_entity_id}). Found a chamber with {} existent occupants and assigned it to that.",
+                                    chamber.occupants.len() - 1
+                                );
+                                let self_clone = self.clone();
+                                tokio::spawn(async move {
+                                    if let Err(err) = self_clone.save_config().await {
+                                        error!("Failed to save stasis-config: {err:?}");
+                                    }
+                                });
+                            } else {
+                                warn!(
+                                    "Detected new Pearl ({pearl_uuid} at {pearl_pos}) with no known owning player (owner id: {owning_player_entity_id}). No fitting chamber found to assign it to."
+                                );
+                            }
                         }
+                    } else if packet.entity_type == EntityKind::Player {
+                        self.check_occupants_near_despawned_pearls(&mut bot);
                     }
                 }
                 ClientboundGamePacket::RemoveEntities(packet) => {
@@ -971,14 +1158,18 @@ impl Module for StasisModule {
                                     | StasisChamberDefinition::RedcoderTrapdoor { trapdoor_pos: pos, .. }
                                     | StasisChamberDefinition::RedcoderShay { base_pos: pos, .. } => pos,
                                     StasisChamberDefinition::RedstoneSingleTrigger { base_pos: pos, .. } => pos,
+                                    StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: pos, .. } => pos,
                                 };
 
                                 let own_pos = Vec3::from(&bot.component::<Position>());
                                 let mut remove_occupant_indices = Vec::new();
                                 for (occupant_index, occupant) in chamber.occupants.iter().enumerate() {
-                                    if occupant.pearl_uuid == Some(*pearl_uuid) {
+                                    if let Some(oc_pearl_uuid) = occupant.pearl_uuid
+                                        && let Some(oc_player_uuid) = occupant.player_uuid
+                                        && oc_pearl_uuid == *pearl_uuid
+                                    {
                                         let player_entity = bot.entity_by::<With<Player>, (&EntityUuid,)>(|(entity_uuid,): &(&EntityUuid,)| {
-                                            ***entity_uuid == occupant.player_uuid
+                                            Some(***entity_uuid) == occupant.player_uuid
                                         });
                                         let mut added = false;
                                         if let Some(player_entity) = player_entity {
@@ -988,18 +1179,29 @@ impl Module for StasisModule {
                                             {
                                                 info!(
                                                     "Pearl {} likely was removed when teleporting the owner ({}) to it. Removing it.",
-                                                    *pearl_uuid, occupant.player_uuid
+                                                    *pearl_uuid, oc_player_uuid
                                                 );
                                                 remove_occupant_indices.push(occupant_index);
                                                 added = true;
+                                            } else {
+                                                self.remove_occupant_if_player_gets_near.lock().push((
+                                                    *pearl_uuid,
+                                                    chamber_pos,
+                                                    oc_player_uuid,
+                                                    Instant::now() + Duration::from_secs(3),
+                                                ));
                                             }
+                                        } else {
+                                            self.remove_occupant_if_player_gets_near.lock().push((
+                                                *pearl_uuid,
+                                                chamber_pos,
+                                                oc_player_uuid,
+                                                Instant::now() + Duration::from_secs(3),
+                                            ));
                                         }
 
                                         if !added && expected && own_pos.horizontal_distance_squared_to(&chamber_pos.center()) <= 56.0f64.powi(2) {
-                                            info!(
-                                                "Despawning of Pearl {} (owned by {}) was expected. Removing it.",
-                                                *pearl_uuid, occupant.player_uuid
-                                            );
+                                            info!("Despawning of Pearl {} (owned by {}) was expected. Removing it.", *pearl_uuid, oc_player_uuid);
                                             remove_occupant_indices.push(occupant_index);
                                         }
                                     }
@@ -1021,12 +1223,110 @@ impl Module for StasisModule {
                         });
                     }
                 }
+                ClientboundGamePacket::SetEntityData(packet) => {
+                    let mut is_interacting = false;
+                    for item in &packet.packed_items.0 {
+                        if item.index == 8
+                            && let EntityDataValue::Byte(value) = item.value
+                            && value & 0x01 > 0
+                        {
+                            is_interacting = true;
+                            break;
+                        }
+                    }
+                    if !is_interacting {
+                        return Ok(());
+                    }
+
+                    let mut mass_adding = self.mass_adding.lock();
+                    if !mass_adding.is_empty()
+                        && let Some(player_entity) =
+                            bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(|(mc_id,): &(&MinecraftEntityId,)| **mc_id == packet.id)
+                    {
+                        let player_uuid = bot.entity_component::<EntityUuid>(player_entity);
+                        if let Some((terminal_name, is_shay, index)) = mass_adding.get_mut(&*player_uuid) {
+                            let player_pos = bot.entity_component::<Position>(player_entity);
+
+                            let mut config = self.config.lock();
+                            for chamber in &config.chambers {
+                                match &chamber.definition {
+                                    StasisChamberDefinition::RedcoderShay { endpoint, .. } | StasisChamberDefinition::RedcoderTrapdoor { endpoint, .. } => {
+                                        if &endpoint.lectern_redcoder_terminal_id == terminal_name && endpoint.chamber_index == *index {
+                                            warn!("Skipping existing index {index} on terminal {terminal_name}");
+                                            *index += 1;
+                                            return Ok(());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if *is_shay {
+                                config.chambers.push(StasisChamberEntry {
+                                    definition: StasisChamberDefinition::RedcoderShay {
+                                        endpoint: LecternRedcoderEndpoint {
+                                            lectern_redcoder_terminal_id: terminal_name.to_owned(),
+                                            chamber_index: *index,
+                                        },
+                                        base_pos: player_pos.to_block_pos_floor(),
+                                    },
+                                    occupants: Vec::new(),
+                                });
+                            } else {
+                                config.chambers.push(StasisChamberEntry {
+                                    definition: StasisChamberDefinition::RedcoderTrapdoor {
+                                        endpoint: LecternRedcoderEndpoint {
+                                            lectern_redcoder_terminal_id: terminal_name.to_owned(),
+                                            chamber_index: *index,
+                                        },
+                                        trapdoor_pos: player_pos.to_block_pos_floor(),
+                                    },
+                                    occupants: Vec::new(),
+                                });
+                            }
+                            info!(
+                                "Added endpoint index {index} to terminal {terminal_name} by Player (uuid: {}) interacting (mass add)",
+                                *player_uuid
+                            );
+                            let self_clone = self.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = self_clone.save_config().await {
+                                    error!("Failed to save stasis-config: {err:?}");
+                                }
+                            });
+                            *index += 1;
+                        }
+                    }
+                }
+                ClientboundGamePacket::Animate(packet) => {
+                    if packet.action as usize != AnimationAction::SwingMainHand as usize {
+                        return Ok(());
+                    }
+
+                    let mut mass_adding = self.mass_adding.lock();
+                    if !mass_adding.is_empty()
+                        && let Some(player_entity) =
+                            bot.entity_by::<With<Player>, (&MinecraftEntityId,)>(|(mc_id,): &(&MinecraftEntityId,)| **mc_id == packet.id)
+                    {
+                        let profile = bot.entity_component::<GameProfileComponent>(player_entity);
+                        if let Some((terminal_name, _is_shay, index)) = mass_adding.remove(&profile.uuid) {
+                            info!(
+                                "{} (uuid: {}) finished mass adding to terminal {terminal_name}. Next id was {index}",
+                                profile.name, profile.uuid
+                            );
+                            if let Some(chat) = &bot_state.chat {
+                                chat.msg(&profile.name, format!("Mass adding finished! Last added index was {}", index - 1))
+                            }
+                        }
+                    }
+                }
                 _ => {}
             },
             Event::Tick => {
                 if bot_state.tasks() == 0 && !pathfind::is_pathfinding(&bot) {
                     self.update_idle_pos(&mut bot.clone());
                 }
+                self.check_occupants_near_despawned_pearls(&mut bot);
             }
             _ => {}
         }

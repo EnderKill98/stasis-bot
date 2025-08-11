@@ -94,7 +94,7 @@ impl Module for LegacyStasisModule {
                         stasis.config.lock().chambers.push(StasisChamberEntry {
                             definition: StasisChamberDefinition::FlippableTrapdoor { trapdoor_pos },
                             occupants: vec![ChamberOccupant {
-                                player_uuid: player_info.profile.uuid,
+                                player_uuid: Some(player_info.profile.uuid),
                                 // No clue, so filler values:
                                 pearl_uuid: None,
                                 thrown_at: chrono::DateTime::UNIX_EPOCH.into(),

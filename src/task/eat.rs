@@ -174,10 +174,11 @@ impl EatTask {
     }
 
     pub fn should_eat(bot: &mut Client) -> bool {
-        let health = bot.component::<Health>();
-        let hunger = bot.component::<Hunger>();
-
-        (hunger.food <= 20 - (3 * 2) || (health.0 < 20f32 && hunger.food < 20)) && hunger.saturation <= 0.0
+        if let (Some(health), Some(hunger)) = (bot.get_component::<Health>(), bot.get_component::<Hunger>()) {
+            (health.0 > 0.0 && hunger.food <= 20 - (3 * 2) || (health.0 < 20f32 && hunger.food < 20)) && hunger.saturation <= 0.0
+        } else {
+            false
+        }
     }
 }
 

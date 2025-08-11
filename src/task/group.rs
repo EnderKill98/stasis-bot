@@ -185,7 +185,8 @@ impl Task for TaskGroup {
                 Ok(TaskOutcome::Ongoing) => return Ok(TaskOutcome::Ongoing),
                 Ok(TaskOutcome::Failed { reason }) => {
                     if is_root {
-                        error!("{self} failed: {reason}");
+                        error!("{self_tostring} failed: {reason}");
+                        subtask.discard(bot.clone(), bot_state).with_context(|| format!("Discard {self_tostring}"))?;
                         info!("Trying next task...");
                         self.next_unchecked();
                         return Ok(TaskOutcome::Ongoing);
@@ -200,6 +201,7 @@ impl Task for TaskGroup {
                     }
                 }
                 Ok(TaskOutcome::Succeeded) => {
+                    subtask.discard(bot.clone(), bot_state).with_context(|| format!("Discard {self_tostring}"))?;
                     self.subtask_index += 1;
                     self.subtask_started = false;
                     if self.subtask_index == subtasks_len {
@@ -232,5 +234,24 @@ impl Task for TaskGroup {
             info!("Nothing to stop for TaskGroup {self}");
             Ok(())
         }
+    }
+
+    fn discard(&mut self, bot: Client, bot_state: &BotState) -> anyhow::Result<()> {
+        let mut result = Ok(());
+        if self.subtask_index < self.subtasks.len() && self.subtask_started {
+            if let Err(err) = self.stop(bot.clone(), bot_state).context("Stop current subtask on discard TaskGroup") {
+                if result.is_ok() {
+                    result = Err(err);
+                }
+            }
+        }
+        for subtask in &mut self.subtasks[self.subtask_index..] {
+            if let Err(err) = subtask.discard(bot.clone(), bot_state).context("Discard some subtask on discard TaskGroup") {
+                if result.is_ok() {
+                    result = Err(err);
+                }
+            }
+        }
+        result
     }
 }

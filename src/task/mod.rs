@@ -1,4 +1,5 @@
 pub mod affect_block;
+pub mod close_inventory_and_sync;
 pub mod delay_duration;
 pub mod delay_ticks;
 pub mod eat;
@@ -14,7 +15,7 @@ use crate::BotState;
 use azalea::{Client, Event};
 use std::fmt::Display;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TaskOutcome {
     Ongoing,
     Succeeded,
@@ -37,6 +38,11 @@ pub trait Task: Display + Send + Sync {
 
     #[allow(unused_variables)]
     fn stop(&mut self, bot: Client, bot_state: &BotState) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[allow(unused_variables)]
+    fn discard(&mut self, bot: Client, bot_state: &BotState) -> anyhow::Result<()> {
         Ok(())
     }
 }

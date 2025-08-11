@@ -106,6 +106,7 @@ impl Task for PathfindTask {
         bot.ecs.lock().send_event(GotoEvent {
             entity: bot.entity,
             goal: self.goal.clone(),
+            //successors_fn: moves::basic::basic_move,
             successors_fn: moves::default_move,
             allow_mining: self.allow_mining,
             min_timeout: PathfinderTimeout::Time(Duration::from_secs(1)),
