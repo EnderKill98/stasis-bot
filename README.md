@@ -15,6 +15,8 @@ https://github.com/EnderKill98/stasis-bot/assets/117233381/fdf172e7-99f9-4a14-87
 ## Running this bot
 
  - Compile or get a release file from the release section
+  - As of 2025-08-15 compiling with current nighly fails for some simd dependency.
+    - To workaround this, go into this repo's directory and run: `rustup toolchain add nightly-2025-06-01 && rustup override set nightly-2025-06-01`
  - Get [ViaProxy](https://github.com/ViaVersion/ViaProxy/releases)
    - Log into the account you want to use
    - Specify the actual server ip you wanna use
