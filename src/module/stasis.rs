@@ -352,11 +352,11 @@ impl StasisModule {
 
                     let mut remove_chambers_indices = Vec::new();
                     for (chamber_index, chamber) in config.chambers.iter().enumerate() {
-                        let rough_pos = chamber.definition.rough_pos();
+                        let existing_rough_pos = chamber.definition.rough_pos();
                         if chamber.definition != definition
-                            && rough_pos.x == rough_pos.x
-                            && rough_pos.z == rough_pos.z
-                            && (rough_pos.y - rough_pos.y).abs() <= 5
+                            && rough_pos.x == existing_rough_pos.x
+                            && rough_pos.z == existing_rough_pos.z
+                            && (rough_pos.y - existing_rough_pos.y).abs() <= 5
                         {
                             warn!(
                                 "Detected an existing close chamber definition ({}) where new one ({}) is supposed to be at roughly {rough_pos}!",
