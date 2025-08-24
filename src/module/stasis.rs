@@ -1087,6 +1087,20 @@ impl Module for StasisModule {
                 }
                 ClientboundGamePacket::AddEntity(packet) => {
                     if packet.entity_type == EntityKind::EnderPearl {
+                        // Ignore
+                        {
+                            let pos = packet.position.to_block_pos_floor();
+                            if OPTS.pearls_min_pos.map(|min| pos.x < min.x || pos.y < min.y || pos.z < min.z).unwrap_or(false)
+                                || OPTS.pearls_max_pos.map(|max| pos.x > max.x || pos.y > max.y || pos.z > max.z).unwrap_or(false)
+                            {
+                                info!(
+                                    "Ignoring Pearl ({} at {}) as it either below --pearls-min-pos or above --pearls-above-pos",
+                                    packet.position, packet.uuid
+                                );
+                                return Ok(());
+                            }
+                        }
+
                         self.spawned_pearl_uuids.lock().insert(packet.id, EntityUuid::new(packet.uuid));
 
                         let owning_player_entity_id = packet.data as i32;

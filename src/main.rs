@@ -10,6 +10,7 @@ pub mod util;
 #[macro_use]
 extern crate tracing;
 
+use crate::blockpos_string::BlockPosString;
 use crate::module::Module;
 use crate::module::autoeat::AutoEatModule;
 use crate::module::chat::ChatModule;
@@ -117,6 +118,10 @@ struct Opts {
     #[clap(long, default_value = "login-secrets.json")]
     auth_file: PathBuf,
 
+    /// Which key to use within the auth-file
+    #[clap(long, default_value = "default")]
+    auth_file_key: String,
+
     /// Only print access token, then quit. Fancy account refresher for something else.
     #[clap(long)]
     just_print_access_token: bool,
@@ -166,6 +171,14 @@ struct Opts {
     /// Attempt to bypass anti-spam measures
     #[clap(long)]
     anti_anti_spam: bool,
+
+    /// If a pearl spawns below this position, it will get ignored (X,Y,Z)
+    #[clap(long)]
+    pearls_min_pos: Option<BlockPosString>,
+
+    /// If a pearl spawns above this position, it will get ignored (X,Y,Z)
+    #[clap(long)]
+    pearls_max_pos: Option<BlockPosString>,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -295,7 +308,9 @@ async fn async_main() -> Result<()> {
             username: auth_result.profile.name,
             access_token: Some(Arc::new(Mutex::new(auth_result.access_token))),
             uuid: Some(auth_result.profile.id),
-            account_opts: azalea::AccountOpts::Microsoft { email: "default".to_owned() },
+            account_opts: azalea::AccountOpts::Microsoft {
+                email: OPTS.auth_file_key.to_owned(),
+            },
             // we don't do chat signing by default unless the user asks for it
             certs: None,
         }
@@ -410,7 +425,7 @@ async fn async_main() -> Result<()> {
 
 async fn auth() -> Result<AuthResult> {
     Ok(azalea::auth::auth(
-        "default",
+        &OPTS.auth_file_key,
         azalea::auth::AuthOpts {
             cache_file: Some(OPTS.auth_file.clone()),
             ..Default::default()
