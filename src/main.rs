@@ -233,7 +233,10 @@ fn main() -> Result<()> {
 async fn async_main() -> Result<()> {
     if !OPTS.just_print_access_token {
         if OPTS.offline_username.is_none() {
-            info!("File used to store Authentication information: {:?}", OPTS.auth_file);
+            info!(
+                "File used to store authentication information: {:?} (key: {:?})",
+                OPTS.auth_file, OPTS.auth_file_key
+            );
         }
 
         if OPTS.no_color {
@@ -258,6 +261,24 @@ async fn async_main() -> Result<()> {
 
         if OPTS.auto_eat {
             info!("Automatic Eating is enabled.");
+        }
+
+        if OPTS.no_stasis && OPTS.pearls_min_pos.is_some() {
+            error!("--pearls-min-pos has no use when --no-stasis is specified!");
+            std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
+        }
+
+        if OPTS.no_stasis && OPTS.pearls_max_pos.is_some() {
+            error!("--pearls-max-pos has no use when --no-stasis is specified!");
+            std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
+        }
+
+        if let Some(pearls_min_pos) = &OPTS.pearls_min_pos {
+            info!("Ignoring any pearls that spawn at a block pos below: {pearls_min_pos}");
+        }
+
+        if let Some(pearls_max_pos) = &OPTS.pearls_max_pos {
+            info!("Ignoring any pearls that spawn at a block pos above: {pearls_max_pos}");
         }
 
         if OPTS.devnet_url.is_some() != OPTS.devnet_access_token.is_some() {
