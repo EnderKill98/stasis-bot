@@ -148,7 +148,7 @@ impl ChatModule {
                     InGameMessageKind::PublicChat => bot.send_chat_packet(&ingame_message.message),
                 },
                 ChatAction::Command(command) => Self::send_command_now(bot, command),
-                ChatAction::Chat(chat) => bot.send_command_packet(&chat),
+                ChatAction::Chat(chat) => bot.send_chat_packet(&chat),
             }
         }
     }
