@@ -1,13 +1,16 @@
 pub mod affect_block;
+pub mod center;
 pub mod close_inventory_and_sync;
 pub mod delay_duration;
 pub mod delay_ticks;
+pub mod disc_jockey;
 pub mod eat;
 pub mod func;
 pub mod group;
 pub mod oncefunc;
 pub mod open_container_block;
 pub mod pathfind;
+pub mod tracked;
 pub mod validate;
 pub mod wait_for_block_unpower;
 
@@ -38,6 +41,11 @@ pub trait Task: Display + Send + Sync {
 
     #[allow(unused_variables)]
     fn stop(&mut self, bot: Client, bot_state: &BotState) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    #[allow(unused_variables)]
+    fn new_task_waiting(&mut self, bot: Client, bot_state: &BotState) -> anyhow::Result<()> {
         Ok(())
     }
 

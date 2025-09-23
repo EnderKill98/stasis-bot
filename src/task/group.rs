@@ -8,9 +8,12 @@ pub struct TaskGroup {
     pub name: Option<String>,
     pub subtasks: Vec<Box<dyn Task>>,
     pub hide_fail: bool,
+    pub dispensable: bool,
+    stop_voluntarily: bool,
 
     subtask_index: usize,
     subtask_started: bool,
+    subtask_notified_new_task_waiting: bool,
 }
 
 impl TaskGroup {
@@ -19,8 +22,11 @@ impl TaskGroup {
             name: None, // == Root
             subtasks: Vec::new(),
             hide_fail: false,
+            dispensable: false,
+            stop_voluntarily: false,
             subtask_index: 0,
             subtask_started: false,
+            subtask_notified_new_task_waiting: false,
         }
     }
 
@@ -33,9 +39,22 @@ impl TaskGroup {
             name: Some(name.as_ref().to_owned()),
             subtasks: Vec::new(),
             hide_fail,
+            dispensable: false,
+            stop_voluntarily: false,
             subtask_index: 0,
             subtask_started: false,
+            subtask_notified_new_task_waiting: false,
         }
+    }
+
+    pub fn with_dispensable(mut self, dispenable: bool) -> Self {
+        self.dispensable = dispenable;
+        self
+    }
+
+    pub fn with_hide_fail(mut self, hide_fail: bool) -> Self {
+        self.hide_fail = hide_fail;
+        self
     }
 
     pub fn name(&self) -> String {
@@ -71,6 +90,8 @@ impl TaskGroup {
         let subtask_tostring = subtask.to_string();
         self.subtasks.insert(self.subtask_index, subtask);
         self.subtask_started = false;
+        self.subtask_notified_new_task_waiting = true;
+
         if self.is_root() {
             info!("Added Task: {subtask_tostring} ({} remain)", self.remaining());
         }
@@ -88,6 +109,7 @@ impl TaskGroup {
 
         self.subtask_index += 1;
         self.subtask_started = false;
+        self.subtask_notified_new_task_waiting = false;
     }
 }
 
@@ -126,6 +148,7 @@ impl Display for TaskGroup {
 impl Task for TaskGroup {
     fn start(&mut self, _bot: Client, _bot_state: &BotState) -> anyhow::Result<()> {
         self.subtask_started = false; // Possibly restart subtask
+        self.subtask_notified_new_task_waiting = false;
         // Delay start until handle on Tick event
         debug!("TaskGroup {} started.", self.name());
         Ok(())
@@ -144,6 +167,11 @@ impl Task for TaskGroup {
 
         if self.subtask_index >= self.subtasks.len() {
             // Sanity check, can be triggered by self.next_unchecked()
+            return Ok(TaskOutcome::Succeeded);
+        }
+
+        if self.stop_voluntarily {
+            debug!("Stopping task group voluntarily: {self}");
             return Ok(TaskOutcome::Succeeded);
         }
 
@@ -182,7 +210,16 @@ impl Task for TaskGroup {
             }
 
             match subtask.handle(bot.clone(), bot_state, event).with_context(|| format!("Handle {self_tostring}")) {
-                Ok(TaskOutcome::Ongoing) => return Ok(TaskOutcome::Ongoing),
+                Ok(TaskOutcome::Ongoing) => {
+                    if subtasks_len > self.subtask_index + 1 && !self.subtask_notified_new_task_waiting {
+                        subtask
+                            .new_task_waiting(bot.clone(), bot_state)
+                            .context("Notifying subtask that new task was added")?;
+                        self.subtask_notified_new_task_waiting = true;
+                        debug!("Notified about new waiting task: {subtask}");
+                    }
+                    return Ok(TaskOutcome::Ongoing);
+                }
                 Ok(TaskOutcome::Failed { reason }) => {
                     if is_root {
                         error!("{self_tostring} failed: {reason}");
@@ -204,6 +241,7 @@ impl Task for TaskGroup {
                     subtask.discard(bot.clone(), bot_state).with_context(|| format!("Discard {self_tostring}"))?;
                     self.subtask_index += 1;
                     self.subtask_started = false;
+                    self.subtask_notified_new_task_waiting = false;
                     if self.subtask_index == subtasks_len {
                         return Ok(TaskOutcome::Succeeded);
                     } else {
@@ -228,6 +266,7 @@ impl Task for TaskGroup {
             let subtask_tostring = subtask.to_string();
             subtask.stop(bot, bot_state).with_context(|| format!("Stop {subtask_tostring}"))?;
             self.subtask_started = false;
+            self.subtask_notified_new_task_waiting = false;
             warn!("Stopped Task: {subtask_tostring}");
             Ok(())
         } else {
@@ -253,5 +292,13 @@ impl Task for TaskGroup {
             }
         }
         result
+    }
+
+    fn new_task_waiting(&mut self, _bot: Client, _bot_state: &BotState) -> anyhow::Result<()> {
+        if self.dispensable {
+            info!("Voluntarily stopping dispensable task group next time: {self}");
+            self.stop_voluntarily = true;
+        }
+        Ok(())
     }
 }

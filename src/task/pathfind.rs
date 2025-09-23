@@ -1,5 +1,6 @@
 use crate::task::{Task, TaskOutcome};
 use crate::{BotState, EXITCODE_PATHFINDER_DEADLOCKED};
+use anyhow::Context;
 use azalea::entity::Position;
 use azalea::pathfinder::PathfinderClientExt;
 use azalea::pathfinder::astar::PathfinderTimeout;
@@ -58,6 +59,7 @@ pub struct PathfindTask {
     goal_name: String,
     last_is_calculating: bool,
     //started: bool,
+    waiting_on_previous_pathfind_to_end_since: Option<Instant>,
     wait_for_pathfind_start: bool,
     last_position: Option<(Instant, Vec3)>,
 }
@@ -74,6 +76,7 @@ impl PathfindTask {
             goal_name: goal_name.as_ref().to_string(),
             last_is_calculating: false,
             //started: false,
+            waiting_on_previous_pathfind_to_end_since: None,
             wait_for_pathfind_start: false,
             last_position: None,
         }
@@ -100,7 +103,12 @@ impl Task for PathfindTask {
                 entity: bot.entity,
                 force: true,
             });
-            warn!("Tried to start pathfinding while doing so! Force aborted it current pathfinding operation!");
+            warn!("Tried to start pathfinding while doing so! Force aborted it current pathfinding operation and waiting for it to end first!");
+            self.waiting_on_previous_pathfind_to_end_since = Some(Instant::now());
+            self.last_is_calculating = false;
+            self.last_position = None;
+            self.wait_for_pathfind_start = false;
+            return Ok(());
         }
 
         bot.ecs.lock().send_event(GotoEvent {
@@ -119,12 +127,30 @@ impl Task for PathfindTask {
             if self.last_is_calculating { " (calculating)" } else { "" },
         );
         self.last_position = None;
+        self.waiting_on_previous_pathfind_to_end_since = None;
         self.wait_for_pathfind_start = true;
         //self.started = true;
         Ok(())
     }
 
-    fn handle(&mut self, bot: Client, _bot_state: &BotState, _event: &Event) -> anyhow::Result<TaskOutcome> {
+    fn handle(&mut self, bot: Client, bot_state: &BotState, _event: &Event) -> anyhow::Result<TaskOutcome> {
+        if let Some(since) = &self.waiting_on_previous_pathfind_to_end_since {
+            if is_pathfinding(&bot) {
+                if since.elapsed().as_secs() >= 15 {
+                    return Ok(TaskOutcome::Failed {
+                        reason: "Waited over 15s for previous pathfinding operation to end!".to_owned(),
+                    });
+                } else {
+                    // Waiting...
+                    return Ok(TaskOutcome::Ongoing);
+                }
+            } else {
+                info!("Previous pathfinding ended. Re-starting current pathfinding task...");
+                self.start(bot.clone(), bot_state)
+                    .context("Re-starting Pathfinding after finished waiting on previous pathfinding to end")?;
+            }
+        }
+
         if let Some(pathfinder) = bot.get_component::<Pathfinder>() {
             self.last_is_calculating = pathfinder.is_calculating;
             if !pathfinder.is_calculating && pathfinder.goal.is_none() {

@@ -66,6 +66,7 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
                     "!eat",
                     "!yaw",
                     "!pitch",
+                    "!dj",
                 ]);
                 if OPTS.enable_pos_command {
                     commands.push("!pos");
@@ -779,6 +780,16 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
             }
 
             feedback(&format!("Unequipped {total} armor pieces!",));
+            Ok(true)
+        }
+
+        "dj" => {
+            if bot_state.disc_jockey.is_none() {
+                feedback("Disc Jockey is not active!");
+                return Ok(true);
+            }
+            let dj = bot_state.disc_jockey.as_ref().unwrap();
+            crate::module::disc_jockey::execute_dj_command(bot, bot_state, sender, command, args, feedback, dj, sender_is_admin).await?;
             Ok(true)
         }
 

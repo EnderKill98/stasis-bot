@@ -1,9 +1,11 @@
 #![feature(error_generic_member_access)]
+#![feature(map_try_insert)]
 
 mod blockpos_string;
 pub mod commands;
 pub mod devnet;
 pub mod module;
+pub mod nbs_format;
 pub mod task;
 pub mod util;
 
@@ -15,6 +17,7 @@ use crate::module::Module;
 use crate::module::autoeat::AutoEatModule;
 use crate::module::chat::ChatModule;
 use crate::module::devnet_handler::DevNetIntegrationModule;
+use crate::module::disc_jockey::DiscJockeyModule;
 use crate::module::emergency_quit::EmergencyQuitModule;
 use crate::module::legacy_stasis::LegacyStasisModule;
 use crate::module::look_at_players::LookAtPlayersModule;
@@ -130,10 +133,11 @@ struct Opts {
     #[clap(long)]
     periodic_swing: bool,
 
+    /*
     /// How many tokio worker threads to use. 0 = Automatic
     #[clap(short = 't', long, default_value = "0")]
     worker_threads: usize,
-
+    */
     /// How many async compute tasks to create (might be pathfinding). 0 = Automatic
     #[clap(short = 'c', long, default_value = "0")]
     compute_threads: usize,
@@ -179,6 +183,22 @@ struct Opts {
     /// If a pearl spawns above this position, it will get ignored (X,Y,Z)
     #[clap(long)]
     pearls_max_pos: Option<BlockPosString>,
+
+    /// Path to folder containing *.nbs song files (enables DiscJockey)
+    #[clap(long)]
+    songs: Option<PathBuf>,
+
+    /// BlockPos of the noteblocks are to play at (for !dj)
+    #[clap(long)]
+    dj_pos: Option<blockpos_string::BlockPosString>,
+
+    /// Specifiy to only allow any dj commands from admins (otherwise anyone in render distance can use it)
+    #[clap(long)]
+    dj_admin_only: bool,
+
+    /// Automatically resume DJ playback when Idle for X seconds (no tasks), goes back if --dj-pos set
+    #[clap(long)]
+    dj_resume_after_idle_for: Option<usize>,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -211,22 +231,15 @@ fn main() -> Result<()> {
         reg.init();
     }
 
-    let worker_threads = if OPTS.worker_threads == 0 { 4 } else { OPTS.worker_threads };
-    info!("Worker threads: {worker_threads}");
+    //let worker_threads = if OPTS.worker_threads == 0 { 4 } else { OPTS.worker_threads };
+    //info!("Worker threads: {worker_threads}");
 
     let worker_thread_num = AtomicU32::new(1);
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(worker_threads)
-        .thread_name_fn(move || {
-            format!(
-                "Tokio Worker {:pad$}",
-                worker_thread_num.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                pad = worker_threads.to_string().len(),
-            )
-        })
+    tokio::runtime::Builder::new_current_thread() // https://github.com/azalea-rs/azalea/tree/main/azalea#using-a-single-threaded-tokio-runtime
+        //.worker_threads(worker_threads) // Does nothing rn
+        .thread_name_fn(move || format!("Tokio Worker {}", worker_thread_num.fetch_add(1, std::sync::atomic::Ordering::Relaxed),))
         .enable_all()
-        .build()
-        .unwrap()
+        .build()?
         .block_on(async_main())
 }
 
@@ -472,6 +485,7 @@ pub struct BotState {
     server_tps: Option<ServerTpsModule>,
     stasis: Option<StasisModule>,
     chat: Option<ChatModule>,
+    disc_jockey: Option<DiscJockeyModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -500,6 +514,11 @@ impl Default for BotState {
                 None
             },
             chat: Some(ChatModule::default()),
+            disc_jockey: if let Some(songs) = &OPTS.songs {
+                Some(DiscJockeyModule::new(songs))
+            } else {
+                None
+            },
         }
     }
 }
@@ -538,6 +557,9 @@ impl BotState {
             modules.push(module);
         };
         if let Some(module) = &self.chat {
+            modules.push(module);
+        };
+        if let Some(module) = &self.disc_jockey {
             modules.push(module);
         };
         modules
@@ -619,6 +641,12 @@ async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
             .with_context(|| format!("Handling {}", module.name()))?;
     }
     if let Some(ref module) = bot_state.chat {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.disc_jockey {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
