@@ -57,7 +57,7 @@ impl Queue {
                         return; // Can't change song
                     }
                     // Choose new one at random, except for the current one
-                    let mut next_current = rand::rng().random_range(0..=self.songs.len() - 1);
+                    let mut next_current = rand::rng().random_range(0..self.songs.len() - 1);
                     if next_current >= current {
                         next_current += 1;
                     }
