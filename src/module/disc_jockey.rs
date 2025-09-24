@@ -680,6 +680,7 @@ pub async fn execute_dj_command<F: Fn(&str) + Send + Sync + 'static>(
             }
         }
         "resume" => {
+            dj.ensure_task_running(bot_state, Some(&sender));
             let state = &mut *dj.state.lock();
             if state.song.is_none() {
                 feedback("There is no song to resume!");
@@ -692,7 +693,6 @@ pub async fn execute_dj_command<F: Fn(&str) + Send + Sync + 'static>(
                 return Ok(());
             }
             if state.desired_status == DesiredPlaybackStatus::Playing {
-                if dj.ensure_task_running(bot_state, Some(sender)) {
                     feedback("Started DJ-Task. Song should resume soon.");
                 } else {
                     feedback("Already wanting to play!");
