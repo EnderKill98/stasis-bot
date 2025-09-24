@@ -613,7 +613,7 @@ impl DiscJockeyTask {
                     break;
                 }
             }
-            info!("Computed tick {:.02} to be note index {} of song...", state.tick, index);
+            debug!("Computed tick {:.02} to be note index {} of song...", state.tick, index);
             *index_for_tick = Some((state.tick, index));
             &mut index_for_tick.as_mut().unwrap()
         };
