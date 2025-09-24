@@ -710,12 +710,12 @@ impl DiscJockeyTask {
 impl Display for DiscJockeyTask {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.phase {
-            SongPlaybackPhase::Initializing => write!(f, "SongPlayTask (Initializing)"),
-            SongPlaybackPhase::Pathfinding { subtask: task } => write!(f, "SongPlayTask (Pathfinding: {task})"),
-            SongPlaybackPhase::Centering { subtask: task } => write!(f, "SongPlayTask (Centering: {task})"),
-            SongPlaybackPhase::WaitForSongAndPlayingDesire { .. } => write!(f, "SongPlayTask (WaitForSongAndPlayingDesire)"),
-            SongPlaybackPhase::Tuning { song, .. } => write!(f, "SongPlayTask (Tuning {:?})", song.friendly_name()),
-            SongPlaybackPhase::Playing { song, .. } => write!(f, "SongPlayTask (Playing {:?})", song.friendly_name()),
+            SongPlaybackPhase::Initializing => write!(f, "DiscJockey (Initializing)"),
+            SongPlaybackPhase::Pathfinding { subtask: task } => write!(f, "DiscJockey (Pathfinding: {task})"),
+            SongPlaybackPhase::Centering { subtask: task } => write!(f, "DiscJockey (Centering: {task})"),
+            SongPlaybackPhase::WaitForSongAndPlayingDesire { .. } => write!(f, "DiscJockey (WaitForSongAndPlayingDesire)"),
+            SongPlaybackPhase::Tuning { song, .. } => write!(f, "DiscJockey (Tuning {:?})", song.friendly_name()),
+            SongPlaybackPhase::Playing { song, .. } => write!(f, "DiscJockey (Playing {:?})", song.friendly_name()),
         }
     }
 }
