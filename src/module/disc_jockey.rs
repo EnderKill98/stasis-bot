@@ -693,10 +693,7 @@ pub async fn execute_dj_command<F: Fn(&str) + Send + Sync + 'static>(
                 return Ok(());
             }
             if state.desired_status == DesiredPlaybackStatus::Playing {
-                    feedback("Started DJ-Task. Song should resume soon.");
-                } else {
-                    feedback("Already wanting to play!");
-                }
+                feedback("Resumed song.");
                 return Ok(());
             }
             state.desired_status = DesiredPlaybackStatus::Playing;
