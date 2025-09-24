@@ -175,10 +175,10 @@ impl Task for CenterTask {
                             *sent_ping_id = Some((ping_id, Instant::now()));
                         } else if let Some(ping_duration) = received_pong {
                             if received_teleport {
-                                warn!("MiniTeleport failed (received teleport)! Attempting again...");
+                                debug!("MiniTeleport failed (received teleport)! Attempting again...");
                                 self.state = CenterState::WaitForStandstill { last_pos: Some(own_pos) };
                             } else if started_at.elapsed() >= Duration::from_millis(100).max(ping_duration * 2) {
-                                info!("MiniTeleport seems to have been successful! Finished centering!");
+                                trace!("MiniTeleport seems to have been successful! Finished centering!");
                                 return Ok(TaskOutcome::Succeeded);
                             }
                         }
@@ -227,7 +227,7 @@ impl Task for CenterTask {
             entity.remove::<LookTowardsCenterComponent>();
         }*/
         if let CenterState::CheckWalk = self.state {
-            info!("Center task got stopped. So stopped walking");
+            debug!("Center task got stopped. So stopped walking");
             bot.walk(WalkDirection::None);
         }
         Ok(())
