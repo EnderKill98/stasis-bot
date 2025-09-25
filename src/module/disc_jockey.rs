@@ -697,7 +697,7 @@ pub async fn execute_dj_command<F: Fn(&str) + Send + Sync + 'static>(
                 return Ok(());
             }
             state.desired_status = DesiredPlaybackStatus::Playing;
-            if !matches!(state.actual_status, ActualPlaybackStatus::Paused) {
+            if !matches!(state.actual_status, ActualPlaybackStatus::Paused | ActualPlaybackStatus::Interrupted) {
                 feedback(&format!(
                     "Resumed, but might not have taken affect as current status is {:?}",
                     state.actual_status
