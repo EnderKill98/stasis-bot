@@ -261,9 +261,9 @@ pub mod tune {
 
                     self.tick_ping(bot);
                     let safe_delay = if let PingState::Responded(_when, duration) = &self.ping {
-                        Duration::from_millis(100) + *duration.min(&Duration::from_millis(50)) * 2
+                        Duration::from_millis(300) + *duration.min(&Duration::from_millis(50)) * 2
                     } else {
-                        Duration::from_millis(150 + 200)
+                        Duration::from_millis(300 + 250)
                     };
 
                     // Get current pitches and Find lowest note to tune next
