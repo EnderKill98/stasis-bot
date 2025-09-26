@@ -97,6 +97,20 @@ impl Queue {
     }
 }
 
+struct FeedbackInfo {
+    when: Instant,
+    username: String,
+}
+
+impl FeedbackInfo {
+    fn new(username: impl AsRef<str>) -> Self {
+        Self {
+            username: username.as_ref().to_string(),
+            when: Instant::now(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DiscJockeyModule {
     song_directory: Arc<PathBuf>,
@@ -105,7 +119,8 @@ pub struct DiscJockeyModule {
     pub songs: Arc<Mutex<Vec<Arc<NbsSong>>>>,
     pub state: Arc<Mutex<PlaybackState>>,
     tracked_task: Arc<Mutex<Option<TrackedTask<DiscJockeyTask>>>>,
-    tracked_send_fail_to: Arc<Mutex<Option<String>>>,
+    positive_feedback: Arc<Mutex<Option<FeedbackInfo>>>,
+    negative_feedback: Arc<Mutex<Option<FeedbackInfo>>>,
     last_task_seen_at: Arc<Mutex<Instant>>,
 
     queue: Arc<Mutex<Queue>>,
@@ -120,7 +135,8 @@ impl DiscJockeyModule {
             songs: Arc::new(Mutex::new(Vec::new())),
             state: Arc::new(Mutex::new(PlaybackState::default())),
             tracked_task: Arc::new(Mutex::new(None)),
-            tracked_send_fail_to: Arc::new(Mutex::new(None)),
+            positive_feedback: Arc::new(Mutex::new(None)),
+            negative_feedback: Arc::new(Mutex::new(None)),
             last_task_seen_at: Arc::new(Mutex::new(Instant::now())),
             queue: Arc::new(Mutex::new(Queue::default())),
         }
@@ -183,6 +199,7 @@ impl DiscJockeyModule {
             queue.songs.push(song.clone());
             queue.current = Some(0);
         }
+        *self.positive_feedback.lock() = Some(FeedbackInfo::new(&sender));
         self.restart_current_song_in_queue(bot, bot_state, Some(sender));
     }
 
@@ -211,7 +228,7 @@ impl DiscJockeyModule {
     }
 
     pub fn ensure_task_running(&self, bot_state: &BotState, triggered_by: Option<impl AsRef<str>>) -> bool {
-        *self.tracked_send_fail_to.lock() = triggered_by.map(|str| str.as_ref().to_string());
+        *self.negative_feedback.lock() = triggered_by.map(|str| FeedbackInfo::new(str));
 
         let mut tracked_task = self.tracked_task.lock();
         if let Some(task) = tracked_task.as_ref()
@@ -314,20 +331,20 @@ impl Module for DiscJockeyModule {
                     let mut tracked_task = self.tracked_task.lock();
                     if let Some(play_task) = tracked_task.as_ref() {
                         if let TrackedTaskStatus::Errored { error } = play_task.status()
-                            && let Some(send_fail_to) = self.tracked_send_fail_to.lock().take()
+                            && let Some(send_fail_to) = self.negative_feedback.lock().take()
                         {
                             if let Some(chat) = &bot_state.chat {
-                                info!("Sending tracked task error to {send_fail_to}: {error}");
-                                chat.msg(send_fail_to, format!("DJ-Task errored: {error}"));
+                                info!("Sending tracked task error to {}: {error}", send_fail_to.username);
+                                chat.msg(send_fail_to.username, format!("DJ-Task errored: {error}"));
                             }
                             *tracked_task = None;
                         } else if let TrackedTaskStatus::Concluded { outcome } = play_task.status()
                             && let TaskOutcome::Failed { reason } = outcome
-                            && let Some(send_fail_to) = self.tracked_send_fail_to.lock().take()
+                            && let Some(send_fail_to) = self.negative_feedback.lock().take()
                         {
                             if let Some(chat) = &bot_state.chat {
-                                info!("Sending tracked task fail to {send_fail_to}: {reason}");
-                                chat.msg(send_fail_to, format!("DJ-Task failed: {reason}"));
+                                info!("Sending tracked task fail to {}: {reason}", send_fail_to.username);
+                                chat.msg(send_fail_to.username, format!("DJ-Task failed: {reason}"));
                             }
                             *tracked_task = None;
                         }
@@ -352,6 +369,61 @@ impl Module for DiscJockeyModule {
                     info!("Automatically resuming DJ, because no Task detected for {dj_resume_after_idle_for}s and actual state is interrupted.");
                     self.ensure_task_running(bot_state, None::<&str>);
                     *self.last_task_seen_at.lock() = Instant::now();
+                }
+
+                {
+                    let mut maybe_feedback = self.positive_feedback.lock();
+                    if let Some(feedback) = maybe_feedback.as_ref() {
+                        let elapsed = feedback.when.elapsed();
+                        if elapsed >= Duration::from_millis(150) && self.tracked_task.lock().as_ref().map(|task| task.status().is_running()).unwrap_or(false) {
+                            let state = self.state.lock();
+                            if state.actual_status == ActualPlaybackStatus::Playing {
+                                if let Some(chat) = &bot_state.chat
+                                    && let Some(song) = &state.song
+                                {
+                                    chat.msg(
+                                        &feedback.username,
+                                        format!(
+                                            "Playing: {:?} [{}]",
+                                            song.friendly_name(),
+                                            DiscJockeyModule::format_timestamp(song.ticks_to_millis(song.length_ticks as f64).floor() as u64, false)
+                                        ),
+                                    );
+                                    maybe_feedback.take(); // Remove
+                                }
+                            } else if state.actual_status == ActualPlaybackStatus::Tuning && elapsed >= Duration::from_millis(750) {
+                                if let Some(chat) = &bot_state.chat
+                                    && let Some(song) = &state.song
+                                {
+                                    chat.msg(
+                                        &feedback.username,
+                                        format!(
+                                            "Tuning to play: {:?} [{}]",
+                                            song.friendly_name(),
+                                            DiscJockeyModule::format_timestamp(song.ticks_to_millis(song.length_ticks as f64).floor() as u64, false)
+                                        ),
+                                    );
+                                    maybe_feedback.take(); // Remove
+                                }
+                            } else if state.actual_status == ActualPlaybackStatus::Positioning && elapsed >= Duration::from_millis(750) {
+                                if let Some(chat) = &bot_state.chat
+                                    && let Some(song) = &state.song
+                                {
+                                    chat.msg(
+                                        &feedback.username,
+                                        format!(
+                                            "Going to play: {:?} [{}]",
+                                            song.friendly_name(),
+                                            DiscJockeyModule::format_timestamp(song.ticks_to_millis(song.length_ticks as f64).floor() as u64, false)
+                                        ),
+                                    );
+                                    maybe_feedback.take(); // Remove
+                                }
+                            } else if elapsed >= Duration::from_millis(2000) {
+                                maybe_feedback.take(); // Remove, nothing positive to report
+                            }
+                        }
+                    }
                 }
             }
             _ => {}
@@ -397,11 +469,6 @@ pub async fn execute_dj_command<F: Fn(&str) + Send + Sync + 'static>(
             }
 
             let song = matches[0].clone();
-            feedback(&format!(
-                "Playing: {:?} [{}]",
-                song.friendly_name(),
-                DiscJockeyModule::format_timestamp(song.ticks_to_millis(song.length_ticks as f64).floor() as u64, false)
-            ));
             dj.play(bot, bot_state, &sender, song.clone());
             return Ok(());
         }
@@ -413,11 +480,6 @@ pub async fn execute_dj_command<F: Fn(&str) + Send + Sync + 'static>(
             }
 
             let song = &songs[rand::rng().random_range(0..songs.len())];
-            feedback(&format!(
-                "Playing: {:?} [{}]",
-                song.friendly_name(),
-                DiscJockeyModule::format_timestamp(song.ticks_to_millis(song.length_ticks as f64).floor() as u64, false)
-            ));
             dj.play(bot, bot_state, &sender, song.clone());
             return Ok(());
         }
