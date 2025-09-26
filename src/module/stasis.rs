@@ -6,7 +6,6 @@ use crate::task::delay_ticks::DelayTicksTask;
 use crate::task::group::TaskGroup;
 use crate::task::oncefunc::OnceFuncTask;
 use crate::task::open_container_block::OpenContainerBlockTask;
-use crate::task::pathfind;
 use crate::task::pathfind::{BoxedPathfindGoal, PathfindTask};
 use crate::task::wait_for_block_unpower::WaitForBlockUnpowerTask;
 use crate::util::InteractableGoal;
@@ -156,6 +155,7 @@ pub struct StasisModule {
         >,
     >,
     pub mass_adding: Arc<Mutex<HashMap<Uuid /*PlayerUuid*/, (String /*LecternRedcoderTerminalId*/, bool /*IsShay*/, usize /*Next index*/)>>>,
+    last_task_seen_at: Arc<Mutex<Instant>>,
 }
 
 impl StasisModule {
@@ -171,6 +171,7 @@ impl StasisModule {
             expect_despawn_of: Default::default(),
             remove_occupant_if_player_gets_near: Default::default(),
             mass_adding: Default::default(),
+            last_task_seen_at: Arc::new(Mutex::new(Instant::now())),
         }
     }
 
@@ -231,10 +232,16 @@ impl StasisModule {
     }
 
     pub fn return_pos(&self, bot: &mut Client) -> Option<BlockPos> {
-        if let Some(last_idle_pos) = self.last_idle_pos.lock().as_ref() {
+        let own_block_pos = Self::current_block_pos(bot);
+        if let Some(last_idle_pos) = self.last_idle_pos.lock().as_ref()
+            && own_block_pos
+                .as_ref()
+                .map(|pos| last_idle_pos.horizontal_distance_squared_to(pos) <= 3500 * 3500)
+                .unwrap_or(false)
+        {
             Some(last_idle_pos.clone())
         } else {
-            Self::current_block_pos(bot)
+            own_block_pos
         }
     }
 
@@ -1078,9 +1085,9 @@ impl Module for StasisModule {
                 self.expect_despawn_of.lock().clear();
             }
             Event::Packet(packet) => match packet.as_ref() {
-                ClientboundGamePacket::PlayerPosition(_) => {
+                /*ClientboundGamePacket::PlayerPosition(_) => {
                     self.clear_idle_pos("Got teleport-Packet");
-                }
+                }*/
                 ClientboundGamePacket::Respawn(_) => {
                     self.spawned_pearl_uuids.lock().clear();
                     self.expect_despawn_of.lock().clear();
@@ -1337,9 +1344,13 @@ impl Module for StasisModule {
                 _ => {}
             },
             Event::Tick => {
-                if bot_state.tasks() == 0 && !pathfind::is_pathfinding(&bot) {
-                    self.update_idle_pos(&mut bot.clone());
+                if bot_state.tasks() > 0 {
+                    *self.last_task_seen_at.lock() = Instant::now();
                 }
+                if self.last_task_seen_at.lock().elapsed() >= Duration::from_secs(3) {
+                    self.update_idle_pos(&mut bot);
+                }
+
                 self.check_occupants_near_despawned_pearls(&mut bot);
             }
             _ => {}
