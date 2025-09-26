@@ -125,6 +125,7 @@ impl ChatModule {
         let command = if command.starts_with("/") { &command[1..] } else { &command }; // Remove leading /
         let command = if command.len() > 255 { &command[..255] } else { &command }; // Truncate
         bot.send_command_packet(command);
+        debug!("Sent command: {command}");
     }
 
     fn tick_queue(&self, bot: &mut Client) {
