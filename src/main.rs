@@ -41,6 +41,7 @@ use azalea::{
 };
 use bevy_log::LogPlugin;
 use clap::Parser;
+use logroller::{Compression, LogRollerBuilder, Rotation, RotationAge, TimeZone};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::sync::atomic::AtomicU32;
@@ -52,6 +53,8 @@ use std::{
     time::{Duration, Instant},
 };
 use strip_ansi_escapes::Writer as StripAnsiWriter;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
 #[allow(dead_code)]
@@ -86,9 +89,17 @@ struct Opts {
     #[clap(short = 'S', long)]
     no_stasis: bool,
 
-    /// Specify a logfile to log everything into as well
+    /// Specify a simple, single logfile to log everything into as well
     #[clap(short = 'l', long)]
     log_file: Option<PathBuf>,
+
+    /// Specify a directory to put automatically rotated and compressed logfiles into
+    #[clap(long)]
+    log_directory: Option<PathBuf>,
+
+    /// Use a different filter in log files (instead of RUST_LOG, but same syntax)
+    #[clap(long)]
+    log_filter: Option<String>,
 
     /// Disable color. Can fix some issues of still persistent escape codes in log files.
     #[clap(short = 'C', long)]
@@ -218,23 +229,74 @@ fn main() -> Result<()> {
         }
     }
 
-    let reg = tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer().with_ansi(!OPTS.no_color).with_thread_names(true));
-    if let Some(logfile_path) = &OPTS.log_file {
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(logfile_path)
-            .context("Open logfile for appending")?;
-        reg.with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(move || StripAnsiWriter::new(file.try_clone().expect("Clone logfile"))),
-        )
-        .init();
-    } else {
-        reg.init();
+    let (non_blocking_stdout, _stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
+    let reg = tracing_subscriber::registry().with(
+        // Default layer outputting to console/tty
+        tracing_subscriber::fmt::layer()
+            .with_ansi(!OPTS.no_color)
+            .with_thread_names(true)
+            .with_writer(non_blocking_stdout)
+            .with_filter(EnvFilter::from_default_env()),
+    );
+
+    let _file_guard: WorkerGuard; // Extend lifetime of workerguard or logs will be empty due to it being dropped early
+
+    // Log either directly to log file or rotated using logrotate into a directory
+    // The filter may be different from default, if --log-filter was specified
+    match (&OPTS.log_file, &OPTS.log_directory) {
+        (Some(_log_file_path), Some(_log_directory_path)) => {
+            eprintln!("Fatal: --log-file and --log-directory are not supported together. Choose one!");
+            std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
+        }
+        (None, Some(log_directory_path)) => {
+            let appender = LogRollerBuilder::new(log_directory_path, &PathBuf::from("stasis-bot"))
+                .rotation(Rotation::AgeBased(RotationAge::Daily))
+                .time_zone(TimeZone::UTC)
+                .compression(Compression::Gzip)
+                .graceful_shutdown(true)
+                .suffix("log".to_owned())
+                .build()?;
+
+            let (non_blocking, worker_guard) = tracing_appender::non_blocking(StripAnsiWriter::new(appender));
+            reg.with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_thread_names(true)
+                    .with_writer(non_blocking)
+                    .with_filter(if let Some(filter) = &OPTS.log_filter {
+                        filter.parse::<EnvFilter>().expect("Parsing --log-filter")
+                    } else {
+                        EnvFilter::from_default_env()
+                    }),
+            )
+            .init();
+            _file_guard = worker_guard;
+        }
+        (Some(log_file_path), None) => {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_file_path)
+                .context("Open logfile for appending")?;
+            let (non_blocking, worker_guard) = tracing_appender::non_blocking(StripAnsiWriter::new(file));
+
+            reg.with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_thread_names(true)
+                    .with_writer(non_blocking)
+                    .with_filter(if let Some(filter) = &OPTS.log_filter {
+                        filter.parse::<EnvFilter>().expect("Parsing --log-filter")
+                    } else {
+                        EnvFilter::from_default_env()
+                    }),
+            )
+            .init();
+            _file_guard = worker_guard;
+        }
+        (None, None) => {
+            reg.init();
+        }
     }
 
     //let worker_threads = if OPTS.worker_threads == 0 { 4 } else { OPTS.worker_threads };
