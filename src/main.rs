@@ -51,6 +51,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use strip_ansi_escapes::Writer as StripAnsiWriter;
 use tracing_subscriber::prelude::*;
 
 #[allow(dead_code)]
@@ -226,7 +227,12 @@ fn main() -> Result<()> {
             .append(true)
             .open(logfile_path)
             .context("Open logfile for appending")?;
-        reg.with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(file)).init();
+        reg.with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(move || StripAnsiWriter::new(file.try_clone().expect("Clone logfile"))),
+        )
+        .init();
     } else {
         reg.init();
     }

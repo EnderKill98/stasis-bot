@@ -54,3 +54,5 @@ rand = "0.9"
 openssl = { version = "*", features = [ "vendored" ] } # Fix common cross-compilation issue
 
 #axum = { version = "0.8.4", features = [ "macros" ] }
+
+strip-ansi-escapes = "0.2"
