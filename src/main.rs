@@ -1,3 +1,4 @@
+pub mod blockpos_string;
 pub mod commands;
 pub mod devnet;
 pub mod module;
@@ -9,6 +10,7 @@ extern crate tracing;
 use crate::module::Module;
 use crate::module::autoeat::AutoEatModule;
 use crate::module::beertender::BeertenderModule;
+use crate::module::chat::ChatModule;
 use crate::module::devnet_handler::DevNetIntegrationModule;
 use crate::module::emergency_quit::EmergencyQuitModule;
 use crate::module::look_at_players::LookAtPlayersModule;
@@ -151,6 +153,16 @@ struct Opts {
     /// Changes the type of goal to reach pearls. Use this if reaching your pearl setup has issues
     #[clap(long)]
     alternate_trapdoor_goal: bool,
+
+    #[clap(long, default_value = "/msg")]
+    message_command: String,
+
+    #[clap(long)]
+    reply_command: Option<String>,
+
+    /// Attempt to bypass anti-spam measures
+    #[clap(long)]
+    anti_anti_spam: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -400,6 +412,7 @@ pub struct BotState {
     devnet_integration: Option<DevNetIntegrationModule>,
     server_tps: Option<ServerTps>,
     beertender: Option<BeertenderModule>,
+    chat: Option<ChatModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -427,6 +440,7 @@ impl Default for BotState {
             devnet_integration: default_if(OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some()),
             server_tps: Some(Default::default()),
             beertender: Some(Default::default()),
+            chat: Some(Default::default()),
         }
     }
 }
@@ -462,6 +476,9 @@ impl BotState {
             modules.push(module);
         };
         if let Some(module) = &self.beertender {
+            modules.push(module);
+        };
+        if let Some(module) = &self.chat {
             modules.push(module);
         };
         modules
@@ -542,6 +559,12 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()
             .await
             .with_context(|| format!("Handling {}", module.name()))?;
     }
+    if let Some(ref module) = bot_state.chat {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
 
     // Process task(s)
     {
@@ -580,76 +603,6 @@ async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()
     }
 
     match event {
-        Event::Chat(packet) => {
-            info!(
-                "CHAT: {}",
-                if OPTS.no_color {
-                    packet.message().to_string()
-                } else {
-                    packet.message().to_ansi()
-                }
-            );
-            let message = packet.message().to_string();
-
-            // Very security and sane way to find out, if message was a dm to self.
-            // Surely no way to cheese it..
-            let mut dm = None;
-            if message.starts_with('[') && message.contains("-> me] ") {
-                // Common format used by Essentials and other custom plugins: [Someone -> me] Message
-                dm = Some((
-                    message.split(" ").next().unwrap()[1..].to_owned(),
-                    message.split("-> me] ").collect::<Vec<_>>()[1].to_owned(),
-                ));
-            } else if message.contains(" whispers to you: ") {
-                // Vanilla minecraft: Someone whispers to you: Message
-                dm = Some((
-                    message.split(" ").next().unwrap().to_owned(),
-                    message.split("whispers to you: ").collect::<Vec<_>>()[1].to_owned(),
-                ));
-            } else if message.contains(" whispers: ") {
-                // Used on 2b2t: Someone whispers: Message
-                let sender = message.split(" ").next().unwrap().to_owned();
-                let mut message = message.split(" whispers: ").collect::<Vec<_>>()[1].to_owned();
-                if message.ends_with(&sender) {
-                    message = message[..(message.len() - sender.len())].to_owned();
-                }
-                dm = Some((sender, message));
-            }
-
-            if let Some((sender, content)) = dm {
-                let (command, args) = if content.contains(' ') {
-                    let mut all_args: Vec<_> = content.split(' ').map(|s| s.to_owned()).collect();
-                    let command = all_args.remove(0);
-                    (command, all_args)
-                } else {
-                    (content, vec![])
-                };
-
-                if bot_state
-                    .last_dm_handled_at
-                    .lock()
-                    .map(|at| at.elapsed() > Duration::from_secs(1))
-                    .unwrap_or(true)
-                {
-                    info!("Executing command {command:?} sent by {sender:?} with args {args:?}");
-                    match commands::execute(&mut bot, &bot_state, sender.clone(), command, args).await {
-                        Ok(executed) => {
-                            if executed {
-                                *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
-                            } else {
-                                warn!("Command was not executed. Most likely an unknown command.");
-                            }
-                        }
-                        Err(err) => {
-                            error!("Command execution failed: {err:?}");
-                            commands::send_command(&mut bot, &format!("msg {sender} Oops: {err}"));
-                        }
-                    }
-                } else {
-                    warn!("Last command was handled less than a second ago. Ignoring command from {sender:?} to avoid getting spam kicked.");
-                }
-            }
-        }
         Event::Tick => {
             // Execute commands from input queue
             {

@@ -1,8 +1,10 @@
 use crate::BotState;
+use crate::blockpos_string;
 use crate::module::Module;
 use crate::task::delay_ticks::DelayTicksTask;
 use crate::task::group::TaskGroup;
 use crate::task::oncefunc::OnceFuncTask;
+use crate::task::pathfind::PathfindTask;
 use crate::task::sip_beer::SipBeerTask;
 use crate::task::swing_beer::SwingBeerTask;
 use anyhow::{Context, anyhow};
@@ -13,12 +15,13 @@ use azalea::entity::{EntityDataValue, EyeHeight, LookDirection, Pose, Position};
 use azalea::inventory::operations::ClickType;
 use azalea::inventory::{Inventory, ItemStack};
 use azalea::packet::game::SendPacketEvent;
+use azalea::pathfinder::goals::BlockPosGoal;
 use azalea::protocol::packets::game::c_animate::AnimationAction;
 use azalea::protocol::packets::game::c_set_equipment::EquipmentSlot;
 use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundContainerClick, ServerboundGamePacket, ServerboundMovePlayerRot};
 use azalea::registry::Item;
 use azalea::world::MinecraftEntityId;
-use azalea::{Client, Event, GameProfileComponent, Vec3};
+use azalea::{BlockPos, Client, Event, GameProfileComponent, Vec3};
 use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -43,6 +46,11 @@ pub struct BeerConfig {
     pub messages_gave_beer: Vec<String>,
     pub messages_gave_last_beer: Vec<String>,
     pub messages_out_of_beer: Vec<String>,
+
+    #[serde(with = "blockpos_string::vec")]
+    pub random_positions: Vec<BlockPos>,
+    pub random_positions_min_secs: u64,
+    pub random_positions_max_secs: u64,
 }
 
 impl Default for BeerConfig {
@@ -62,6 +70,10 @@ impl Default for BeerConfig {
             messages_gave_beer: vec![],
             messages_gave_last_beer: vec!["This was your last one".to_owned()],
             messages_out_of_beer: vec!["Uhm... This is akward... I'm out of beer!".to_owned()],
+
+            random_positions: vec![],
+            random_positions_min_secs: 30,
+            random_positions_max_secs: 120,
         }
     }
 }
@@ -71,6 +83,7 @@ pub struct BeertenderModule {
     pub config: Arc<Mutex<BeerConfig>>,
 
     random_sipping: Arc<Mutex<Option<(u64 /*Ticks*/, u64 /*Target ticks*/)>>>,
+    random_positions: Arc<Mutex<Option<(u64 /*Ticks*/, u64 /*Target ticks*/)>>>,
     holds_beer: Arc<Mutex<HashSet<i32>>>,
 }
 
@@ -88,6 +101,9 @@ impl BeertenderModule {
             let config = self.config.lock();
             if config.sip_random_min_secs > config.sip_random_max_secs {
                 warn!("Random sipping will not work as sip_random_min_secs must be lower or equal to sip_random_max_secs!");
+            }
+            if config.random_positions_min_secs > config.random_positions_max_secs {
+                warn!("Random positions will not work as random_positions_min_secs must be lower or equal to random_positions_max_secs!");
             }
         } else {
             *self.config.lock() = Default::default();
@@ -198,21 +214,58 @@ impl BeertenderModule {
             return Ok(());
         };
 
+        *self.random_positions.lock() = None; // Reset time for position change
+
         let message_come_closer = Self::random_message(&self.config.lock().messages_come_closer).map(|s| s.to_owned());
         let message_denied_beer = Self::random_message(&self.config.lock().messages_denied_beer).map(|s| s.to_owned());
         let message_gave_beer = Self::random_message(&self.config.lock().messages_gave_beer).map(|s| s.to_owned());
         let message_gave_last_beer = Self::random_message(&self.config.lock().messages_gave_last_beer).map(|s| s.to_owned());
         let message_out_of_beer = Self::random_message(&self.config.lock().messages_out_of_beer).map(|s| s.to_owned());
 
+        let look_direction = azalea::direction_looking_at(&own_eye_pos, &sender_eye_pos);
+
         if sender_pos.distance_to(&Vec3::from(&own_pos)) >= 5.0 {
-            //feedback(true, "Come closer");
-            if let Some(ref msg) = message_come_closer {
-                feedback(true, msg);
-            }
+            let almost_down = LookDirection::new(look_direction.y_rot, 60.0);
+            let almost_down_2 = LookDirection::new(look_direction.y_rot, 60.0);
+            bot_state.add_task(
+                TaskGroup::new(format!("Urge {username} to come closer for beer"))
+                    .with(DelayTicksTask::new(4))
+                    .with(OnceFuncTask::new("Look at user 1", move |bot, _bot_state| {
+                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(8))
+                    .with(OnceFuncTask::new("Nudge closer 1", move |bot, _bot_state| {
+                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = almost_down;
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(4))
+                    .with(OnceFuncTask::new("Look back up a bit", move |bot, _bot_state| {
+                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = almost_down_2;
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(4))
+                    .with(OnceFuncTask::new("Nudge closer 2", move |bot, _bot_state| {
+                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = almost_down;
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(4))
+                    .with(OnceFuncTask::new("Look at user 2", move |bot, _bot_state| {
+                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(4))
+                    .with(OnceFuncTask::new("Nope message", move |_bot, _bot_state| {
+                        if let Some(ref msg) = message_come_closer {
+                            feedback(true, msg);
+                        }
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(20)),
+            );
+
             return Ok(());
         }
-
-        let look_direction = azalea::direction_looking_at(&own_eye_pos, &sender_eye_pos);
 
         if self.had_enough_beer(&username) {
             // Task to visually deny the player
@@ -461,6 +514,7 @@ impl Module for BeertenderModule {
                     // Reset when bot does something
                     *self.random_sipping.lock() = None;
                 } else {
+                    // Sipping
                     let mut random_sipping = self.random_sipping.lock();
                     if random_sipping.is_none() {
                         let config = self.config.lock();
@@ -480,6 +534,37 @@ impl Module for BeertenderModule {
 
                     if reset_random_sipping {
                         *random_sipping = None;
+                    }
+
+                    // Random positions
+                    let mut random_positions = self.random_positions.lock();
+                    if random_positions.is_none() {
+                        let config = self.config.lock();
+                        if config.random_positions_min_secs <= config.random_positions_max_secs && !config.random_positions.is_empty() {
+                            *random_positions = Some((
+                                0,
+                                rand::rng().random_range(config.random_positions_min_secs * 20..=config.random_positions_max_secs * 20),
+                            ));
+                        }
+                    }
+
+                    let mut reset_random_positions = false;
+                    if let Some(ref mut random_positions) = *random_positions {
+                        random_positions.0 += 1;
+                        if random_positions.0 >= random_positions.1 {
+                            let config = self.config.lock();
+                            if config.random_positions.is_empty() {
+                                warn!("No random position to walk to!");
+                            } else {
+                                let random_pos = config.random_positions[rand::rng().random_range(0..config.random_positions.len())].clone();
+                                bot_state.add_task(PathfindTask::new(false, BlockPosGoal(random_pos), "New random pos"));
+                            }
+                            reset_random_positions = true;
+                        }
+                    }
+
+                    if reset_random_positions {
+                        *random_positions = None;
                     }
                 }
             }
