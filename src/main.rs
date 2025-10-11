@@ -498,7 +498,7 @@ impl BotState {
     }
 }
 
-async fn handle(mut bot: Client, event: Event, bot_state: BotState) -> Result<()> {
+async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
     if let Some(ref module) = bot_state.auto_eat {
         module
             .handle(bot.clone(), &event, &bot_state)
