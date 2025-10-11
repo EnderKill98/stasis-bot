@@ -48,6 +48,7 @@ pub struct ChatModule {
     queue: Arc<Mutex<VecDeque<ChatAction>>>,
     available_actions: Arc<AtomicU32>,
     last_dm_from: Arc<Mutex<Option<String>>>,
+    last_dm_to: Arc<Mutex<Option<String>>>,
     last_anti_spam_word_count: Arc<AtomicU32>,
 }
 
@@ -56,6 +57,7 @@ impl ChatModule {
         self.available_actions.store(9, Ordering::Relaxed);
         self.queue.lock().clear();
         *self.last_dm_from.lock() = None;
+        *self.last_dm_to.lock() = None;
     }
 
     pub fn queue(&self, action: ChatAction) {
@@ -110,14 +112,21 @@ impl ChatModule {
             message
         };
 
-        if let Some(reply_command) = &OPTS.reply_command
+        if let Some(last_command) = &OPTS.last_command
+            && let Some(last_dm_to) = self.last_dm_to.lock().as_ref()
+            && last_dm_to == &user
+        {
+            Self::send_command_now(bot, format!("{last_command} {message}"));
+        } else if let Some(reply_command) = &OPTS.reply_command
             && let Some(last_dm_from) = self.last_dm_from.lock().as_ref()
             && last_dm_from == &user
         {
             Self::send_command_now(bot, format!("{reply_command} {message}"));
+            *self.last_dm_to.lock() = Some(user.to_owned());
         } else {
             let message_command = &OPTS.message_command;
             Self::send_command_now(bot, format!("{message_command} {user} {message}"));
+            *self.last_dm_to.lock() = Some(user.to_owned());
         }
     }
 

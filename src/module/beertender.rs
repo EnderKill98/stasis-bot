@@ -21,7 +21,7 @@ use azalea::protocol::packets::game::c_set_equipment::EquipmentSlot;
 use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundContainerClick, ServerboundGamePacket, ServerboundMovePlayerRot};
 use azalea::registry::Item;
 use azalea::world::MinecraftEntityId;
-use azalea::{BlockPos, Client, Event, GameProfileComponent, Vec3};
+use azalea::{BlockPos, BotClientExt, Client, Event, GameProfileComponent, Vec3};
 use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ use std::sync::Arc;
 pub struct BeerConfig {
     pub max_beer: u32,
     pub throw_pitch: f32,
+    pub jump_before_throw: bool,
     pub beer_handed_out: HashMap<String, u32>,
     pub sip_random_min_secs: u64,
     pub sip_random_max_secs: u64,
@@ -58,6 +59,7 @@ impl Default for BeerConfig {
         Self {
             max_beer: 10,
             throw_pitch: -30.0,
+            jump_before_throw: false,
             beer_handed_out: Default::default(),
             sip_random_min_secs: 5,
             sip_random_max_secs: 15,
@@ -224,7 +226,7 @@ impl BeertenderModule {
 
         let look_direction = azalea::direction_looking_at(&own_eye_pos, &sender_eye_pos);
 
-        if sender_pos.distance_to(&Vec3::from(&own_pos)) >= 5.0 {
+        if sender_pos.distance_to(&Vec3::from(&own_pos)) >= 4.0 {
             let almost_down = LookDirection::new(look_direction.y_rot, 60.0);
             let almost_down_2 = LookDirection::new(look_direction.y_rot, 60.0);
             bot_state.add_task(
@@ -316,95 +318,105 @@ impl BeertenderModule {
             let throw_pitch = self.config.lock().throw_pitch;
             let throw_look = LookDirection::new(look_direction.y_rot, throw_pitch);
             let self_clone = self.clone();
-            bot_state.add_task(
-                TaskGroup::new(format!("Give {username}'s Beer"))
-                    .with(DelayTicksTask::new(4))
-                    .with(OnceFuncTask::new("Look at user 1", move |bot, _bot_state| {
-                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
-                        Ok(())
-                    }))
-                    .with(DelayTicksTask::new(8))
-                    .with(OnceFuncTask::new("Move head up (Nod)", move |bot, _bot_state| {
-                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = nod_down;
-                        Ok(())
-                    }))
-                    /*.with(DelayTicksTask::new(4))
-                    .with(OnceFuncTask::new("Nod 2", move |bot, _bot_state| {
-                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = nod_up;
-                        Ok(())
-                    }))*/
-                    .with(DelayTicksTask::new(4))
-                    .with(OnceFuncTask::new("Look at user 2", move |bot, _bot_state| {
-                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
-                        Ok(())
-                    }))
-                    .with(DelayTicksTask::new(8))
-                    .with(OnceFuncTask::new("Recheck and throw beer", move |mut bot, _bot_state| {
-                        if self_clone.had_enough_beer(&username) {
-                            if let Some(ref msg) = message_denied_beer {
-                                feedback(true, msg);
-                            }
-                            return Ok(());
-                        }
-                        let beer_slot = Self::find_beer_slot(&mut bot);
-                        if beer_slot.is_none() {
-                            if let Some(ref msg) = message_out_of_beer {
-                                feedback(true, msg);
-                            }
-                            return Ok(());
-                        }
-                        let beer_slot = beer_slot.unwrap();
-                        info!(
-                            "Giving one beer to {username} (from slot {beer_slot}). I currently have {} beer left.",
-                            Self::beer_count(&mut bot.clone())
-                        );
-                        let mut ecs = bot.ecs.lock();
-                        let sent_by = bot.entity;
-                        ecs.send_event(SendPacketEvent {
-                            sent_by,
-                            packet: ServerboundGamePacket::MovePlayerRot(ServerboundMovePlayerRot {
-                                look_direction: throw_look,
-                                on_ground: true,
-                            }),
-                        });
-                        ecs.send_event(SendPacketEvent {
-                            sent_by,
-                            packet: ServerboundGamePacket::ContainerClick(ServerboundContainerClick {
-                                container_id: 0,
-                                state_id: 0,
+            let mut task = TaskGroup::new(format!("Give {username}'s Beer"))
+                .with(DelayTicksTask::new(4))
+                .with(OnceFuncTask::new("Look at user 1", move |bot, _bot_state| {
+                    *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
+                    Ok(())
+                }))
+                .with(DelayTicksTask::new(8))
+                .with(OnceFuncTask::new("Move head up (Nod)", move |bot, _bot_state| {
+                    *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = nod_down;
+                    Ok(())
+                }))
+                /*.with(DelayTicksTask::new(4))
+                .with(OnceFuncTask::new("Nod 2", move |bot, _bot_state| {
+                    *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = nod_up;
+                    Ok(())
+                }))*/
+                .with(DelayTicksTask::new(4))
+                .with(OnceFuncTask::new("Look at user 2", move |bot, _bot_state| {
+                    *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
+                    Ok(())
+                }))
+                .with(DelayTicksTask::new(8));
 
-                                slot_num: beer_slot as i16,
-                                button_num: 0,
-                                click_type: ClickType::Throw,
-
-                                carried_item: ItemStack::Empty,
-                                changed_slots: HashMap::default(),
-                            }),
-                        });
-                        ecs.send_event(SendPacketEvent {
-                            sent_by,
-                            packet: ServerboundGamePacket::MovePlayerRot(ServerboundMovePlayerRot {
-                                look_direction,
-                                on_ground: true,
-                            }),
-                        });
-
-                        *ecs.get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
-                        self_clone.gave_beer(&username)?;
-                        drop(ecs);
-                        if self_clone.had_enough_beer(&username) {
-                            if let Some(ref msg) = message_gave_last_beer {
-                                feedback(true, msg);
-                            }
-                        } else {
-                            if let Some(ref msg) = message_gave_beer {
-                                feedback(true, msg);
-                            }
-                        }
+            if self.config.lock().jump_before_throw {
+                task = task
+                    .with(OnceFuncTask::new("Jump before throw", move |mut bot, _bot_state| {
+                        bot.jump();
                         Ok(())
                     }))
-                    .with(DelayTicksTask::new(8)),
-            );
+                    .with(DelayTicksTask::new(4)); // Should be most height of jump
+            }
+
+            task = task
+                .with(OnceFuncTask::new("Recheck and throw beer", move |mut bot, _bot_state| {
+                    if self_clone.had_enough_beer(&username) {
+                        if let Some(ref msg) = message_denied_beer {
+                            feedback(true, msg);
+                        }
+                        return Ok(());
+                    }
+                    let beer_slot = Self::find_beer_slot(&mut bot);
+                    if beer_slot.is_none() {
+                        if let Some(ref msg) = message_out_of_beer {
+                            feedback(true, msg);
+                        }
+                        return Ok(());
+                    }
+                    let beer_slot = beer_slot.unwrap();
+                    info!(
+                        "Giving one beer to {username} (from slot {beer_slot}). I currently have {} beer left.",
+                        Self::beer_count(&mut bot.clone())
+                    );
+                    let mut ecs = bot.ecs.lock();
+                    let sent_by = bot.entity;
+                    ecs.send_event(SendPacketEvent {
+                        sent_by,
+                        packet: ServerboundGamePacket::MovePlayerRot(ServerboundMovePlayerRot {
+                            look_direction: throw_look,
+                            on_ground: true,
+                        }),
+                    });
+                    ecs.send_event(SendPacketEvent {
+                        sent_by,
+                        packet: ServerboundGamePacket::ContainerClick(ServerboundContainerClick {
+                            container_id: 0,
+                            state_id: 0,
+
+                            slot_num: beer_slot as i16,
+                            button_num: 0,
+                            click_type: ClickType::Throw,
+
+                            carried_item: ItemStack::Empty,
+                            changed_slots: HashMap::default(),
+                        }),
+                    });
+                    ecs.send_event(SendPacketEvent {
+                        sent_by,
+                        packet: ServerboundGamePacket::MovePlayerRot(ServerboundMovePlayerRot {
+                            look_direction,
+                            on_ground: true,
+                        }),
+                    });
+
+                    *ecs.get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_direction;
+                    self_clone.gave_beer(&username)?;
+                    drop(ecs);
+                    if self_clone.had_enough_beer(&username) {
+                        if let Some(ref msg) = message_gave_last_beer {
+                            feedback(true, msg);
+                        }
+                    } else {
+                        if let Some(ref msg) = message_gave_beer {
+                            feedback(true, msg);
+                        }
+                    }
+                    Ok(())
+                }))
+                .with(DelayTicksTask::new(8));
+            bot_state.add_task(task);
         }
         Ok(())
     }

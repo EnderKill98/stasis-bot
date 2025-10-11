@@ -160,6 +160,11 @@ struct Opts {
     #[clap(long)]
     reply_command: Option<String>,
 
+    /// Some servers have a command that allows you to send a message to the same person
+    /// you sent a message to last. Set this if available.
+    #[clap(long)]
+    last_command: Option<String>,
+
     /// Attempt to bypass anti-spam measures
     #[clap(long)]
     anti_anti_spam: bool,
