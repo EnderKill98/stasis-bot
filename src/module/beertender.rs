@@ -226,7 +226,7 @@ impl BeertenderModule {
 
         let look_direction = azalea::direction_looking_at(&own_eye_pos, &sender_eye_pos);
 
-        if sender_pos.distance_to(&Vec3::from(&own_pos)) >= 4.0 {
+        if sender_pos.distance_to(&Vec3::from(&own_pos)) >= 5.0 {
             let almost_down = LookDirection::new(look_direction.y_rot, 60.0);
             let almost_down_2 = LookDirection::new(look_direction.y_rot, 60.0);
             bot_state.add_task(
@@ -248,6 +248,16 @@ impl BeertenderModule {
                     }))
                     .with(DelayTicksTask::new(4))
                     .with(OnceFuncTask::new("Nudge closer 2", move |bot, _bot_state| {
+                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = almost_down;
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(4))
+                    .with(OnceFuncTask::new("Look back up a bit 2", move |bot, _bot_state| {
+                        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = almost_down_2;
+                        Ok(())
+                    }))
+                    .with(DelayTicksTask::new(4))
+                    .with(OnceFuncTask::new("Nudge closer 3", move |bot, _bot_state| {
                         *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = almost_down;
                         Ok(())
                     }))
