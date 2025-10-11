@@ -228,7 +228,7 @@ impl BeertenderModule {
 
         if sender_pos.distance_to(&Vec3::from(&own_pos)) >= 5.0 {
             let almost_down = LookDirection::new(look_direction.y_rot, 60.0);
-            let almost_down_2 = LookDirection::new(look_direction.y_rot, 60.0);
+            let almost_down_2 = LookDirection::new(look_direction.y_rot, 20.0);
             bot_state.add_task(
                 TaskGroup::new(format!("Urge {username} to come closer for beer"))
                     .with(DelayTicksTask::new(4))
@@ -267,7 +267,7 @@ impl BeertenderModule {
                         Ok(())
                     }))
                     .with(DelayTicksTask::new(4))
-                    .with(OnceFuncTask::new("Nope message", move |_bot, _bot_state| {
+                    .with(OnceFuncTask::new("Come closer message", move |_bot, _bot_state| {
                         if let Some(ref msg) = message_come_closer {
                             feedback(true, msg);
                         }
