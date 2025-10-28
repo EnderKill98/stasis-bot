@@ -54,6 +54,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = [ "serde" ] }
 rand = "0.9"
 #reqwest = "0.12.20"
-openssl = { version = "*", features = [ "vendored" ] } # Fix common cross-compilation issue
+openssl = { version = "*", features = [ "vendored" ] }
+reqwest = "0.12.23" # Fix common cross-compilation issue
 
 #axum = { version = "0.8.4", features = [ "macros" ] }

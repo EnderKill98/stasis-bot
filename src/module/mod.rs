@@ -10,7 +10,6 @@ pub mod legacy_stasis;
 pub mod look_at_players;
 pub mod periodic_swing;
 pub mod server_tps;
-pub mod shulker_counter;
 pub mod soundness;
 pub mod stasis;
 pub mod visual_range;

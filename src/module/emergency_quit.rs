@@ -113,9 +113,18 @@ impl Module for EmergencyQuitModule {
                             info!("A totem was popped! But currently ignoring harm.");
                             return Ok(());
                         }
+                        let last_damage_event_suffix = if let Some(soundness) = &bot_state.soundness
+                            && let Some((when, message)) = &*soundness.last_damage_event.lock()
+                        {
+                            format!("\n{:?} ago: {message}", when.elapsed())
+                        } else {
+                            String::new()
+                        };
                         // Totem popped!
                         warn!("A totem was popped! Disconnecting and quitting...");
-                        std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
+                        bot_state.webhook_alert(format!("`💔` Popped a totem! Disconnecting and quitting...{last_damage_event_suffix}"));
+                        bot.disconnect();
+                        bot_state.wait_on_webhooks_and_exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
                     }
                 }
                 ClientboundGamePacket::SetHealth(packet) => {
@@ -143,11 +152,32 @@ impl Module for EmergencyQuitModule {
                         if let Some(position) = bot.get_component::<Position>() {
                             info!("I'm at {}", Vec3::from(&position));
                         }
-                        std::process::exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
+                        let last_damage_event_suffix = if let Some(soundness) = &bot_state.soundness
+                            && let Some((when, message)) = &*soundness.last_damage_event.lock()
+                        {
+                            format!("\n{:?} ago: {message}", when.elapsed())
+                        } else {
+                            String::new()
+                        };
+                        bot_state.webhook_alert(format!(
+                            "`❤️‍🩹` My Health got below {:.02} (is {:.02}! Disconnecting and quitting...{last_damage_event_suffix}",
+                            self.hp_threshold, packet.health
+                        ));
+                        bot.disconnect();
+                        bot_state.wait_on_webhooks_and_exit(EXITCODE_LOW_HEALTH_OR_TOTEM_POP);
                     }
                 }
                 _ => {}
             },
+            Event::Death(packet) => {
+                if let Some(packet) = packet {
+                    info!("You died: {}", packet.message);
+                    bot_state.webhook_alert(format!("`💀` You died: {}", packet.message));
+                } else {
+                    info!("You died!");
+                    bot_state.webhook_alert("`💀` You died");
+                }
+            }
             _ => {}
         }
         Ok(())

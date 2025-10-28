@@ -812,6 +812,13 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
 
     match message {
         devnet::Message::CheckRequest { for_mc_id, destination } => {
+            if let Some(soundness) = &bot_state.soundness
+                && !soundness.is_ingame()
+            {
+                send_devnet_feedback(bot.username(), for_mc_id, true, "I'm currently not in-game, yet!");
+                return Ok(());
+            }
+
             let sender = bot
                 .tab_list()
                 .iter()
@@ -867,6 +874,13 @@ pub async fn handle_devnet_message(bot: &mut Client, bot_state: &BotState, messa
             for_mc_id,
             destination,
         } => {
+            if let Some(soundness) = &bot_state.soundness
+                && !soundness.is_ingame()
+            {
+                send_devnet_feedback(bot.username(), for_mc_id, true, "I'm currently not in-game, yet!");
+                return Ok(());
+            }
+
             let sender = bot
                 .tab_list()
                 .iter()

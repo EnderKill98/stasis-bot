@@ -218,6 +218,11 @@ struct Opts {
 
     #[clap(long)]
     webhook_alert_role_id: Option<u64>,
+
+    #[clap(long)]
+    /// Seems that azalea currently has issues getting the correct damage types.
+    /// Use this as a workaround on 1.21.4
+    use_hardcoded_damage_types: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -610,6 +615,9 @@ impl BotState {
         if let Some(module) = &self.auto_eat {
             modules.push(module);
         };
+        if let Some(module) = &self.webhook {
+            modules.push(module);
+        };
         if let Some(module) = &self.periodic_swing {
             modules.push(module);
         };
@@ -643,9 +651,6 @@ impl BotState {
         if let Some(module) = &self.disc_jockey {
             modules.push(module);
         };
-        if let Some(module) = &self.webhook {
-            modules.push(module);
-        };
         modules
     }
 
@@ -660,6 +665,30 @@ impl BotState {
 
     pub fn tasks(&self) -> u64 {
         self.root_task_group.lock().remaining()
+    }
+
+    pub fn webhook_alert(&self, message: impl AsRef<str>) {
+        if let Some(webhook) = &self.webhook {
+            webhook.webhook_alert(message);
+        } else {
+            info!("Webhook module not active. Message: {}", message.as_ref());
+        }
+    }
+
+    pub fn webhook_silent(&self, message: impl AsRef<str>) {
+        if let Some(webhook) = &self.webhook {
+            webhook.webhook_silent(message);
+        } else {
+            info!("Webhook module not active. Message: {}", message.as_ref());
+        }
+    }
+
+    pub fn webhook(&self, message: impl AsRef<str>) {
+        if let Some(webhook) = &self.webhook {
+            webhook.webhook(message);
+        } else {
+            info!("Webhook-Message (not enabled): {}", message.as_ref());
+        }
     }
 
     pub fn wait_on_webhooks_and_exit(&self, exit_code: i32) {
@@ -688,6 +717,12 @@ impl BotState {
 
 async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
     if let Some(ref module) = bot_state.auto_eat {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.webhook {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
@@ -754,12 +789,6 @@ async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
             .with_context(|| format!("Handling {}", module.name()))?;
     }
     if let Some(ref module) = bot_state.disc_jockey {
-        module
-            .handle(bot.clone(), &event, &bot_state)
-            .await
-            .with_context(|| format!("Handling {}", module.name()))?;
-    }
-    if let Some(ref module) = bot_state.webhook {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
