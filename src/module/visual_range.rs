@@ -112,13 +112,13 @@ impl Module for VisualRangeModule {
                                     "{} ({}) entered visual range{}",
                                     player_info.profile.name,
                                     player_info.uuid,
-                                    if is_stranger { " for the first time!" } else { "." }
+                                    if is_stranger { " **for the first time**!" } else { "." }
                                 );
                                 format!(
                                     "`🔷` [{}](<https://namemc.com/profile/{}>) entered visual range{}",
                                     player_info.profile.name,
                                     player_info.uuid,
-                                    if is_stranger { " for the first time!" } else { "." }
+                                    if is_stranger { " **for the first time**!" } else { "." }
                                 )
                             }
                             None => {
