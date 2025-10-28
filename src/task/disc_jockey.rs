@@ -733,6 +733,13 @@ impl Task for DiscJockeyTask {
             self.stop(bot, bot_state)?;
             return Ok(TaskOutcome::Succeeded);
         }
+        if let Event::Disconnect(_) = &event {
+            warn!("Stopping task, because disconnected.");
+            self.stop(bot, bot_state)?;
+            return Ok(TaskOutcome::Failed {
+                reason: "Disconnected".to_owned(),
+            });
+        }
 
         // Phase: Initialize
         if let SongPlaybackPhase::Initializing = self.phase {

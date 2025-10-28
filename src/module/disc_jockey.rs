@@ -1,5 +1,6 @@
 use crate::BotState;
 use crate::module::Module;
+use crate::module::soundness::InGameStatus;
 use crate::nbs_format::NbsSong;
 use crate::task::TaskOutcome;
 use crate::task::disc_jockey::{ActualPlaybackStatus, DesiredPlaybackStatus, DiscJockeyTask, PlaybackState};
@@ -326,6 +327,14 @@ impl Module for DiscJockeyModule {
                     }
                 }
             }
+            /*Event::Disconnect(_) => {
+                if let Some(tracked_task) = self.tracked_task.lock().as_mut() {
+                    // Pass early to task
+                    if tracked_task.status().is_running() {
+                        tracked_task.handle(bot.clone(), bot_state, event).ok();
+                    }
+                }
+            }*/
             Event::Tick => {
                 {
                     let mut tracked_task = self.tracked_task.lock();
@@ -365,6 +374,7 @@ impl Module for DiscJockeyModule {
                     && self.state.lock().actual_status == ActualPlaybackStatus::Interrupted
                     && self.state.lock().desired_status == DesiredPlaybackStatus::Playing
                     && self.last_task_seen_at.lock().elapsed() >= Duration::from_secs(dj_resume_after_idle_for as u64)
+                    && bot_state.soundness.as_ref().map(|s| s.is_ingame_for(Duration::from_secs(10))).unwrap_or(true)
                 {
                     info!("Automatically resuming DJ, because no Task detected for {dj_resume_after_idle_for}s and actual state is interrupted.");
                     self.ensure_task_running(bot_state, None::<&str>);
