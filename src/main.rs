@@ -26,6 +26,7 @@ use crate::module::server_tps::ServerTpsModule;
 use crate::module::soundness::SoundnessModule;
 use crate::module::stasis::StasisModule;
 use crate::module::visual_range::VisualRangeModule;
+use crate::module::webhook::WebhookModule;
 use crate::task::group::TaskGroup;
 use crate::task::{Task, TaskOutcome};
 use anyhow::{Context, Result};
@@ -44,7 +45,7 @@ use clap::Parser;
 use logroller::{Compression, LogRollerBuilder, Rotation, RotationAge, TimeZone};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::{
     collections::VecDeque,
     io::IsTerminal,
@@ -211,6 +212,12 @@ struct Opts {
     /// Automatically resume DJ playback when Idle for X seconds (no tasks), goes back if --dj-pos set
     #[clap(long)]
     dj_resume_after_idle_for: Option<usize>,
+
+    #[clap(long)]
+    webhook_url: Option<String>,
+
+    #[clap(long)]
+    webhook_alert_role_id: Option<u64>,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -554,6 +561,7 @@ pub struct BotState {
     stasis: Option<StasisModule>,
     chat: Option<ChatModule>,
     disc_jockey: Option<DiscJockeyModule>,
+    webhook: Option<WebhookModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -584,6 +592,11 @@ impl Default for BotState {
             chat: Some(ChatModule::default()),
             disc_jockey: if let Some(songs) = &OPTS.songs {
                 Some(DiscJockeyModule::new(songs))
+            } else {
+                None
+            },
+            webhook: if let Some(url) = &OPTS.webhook_url {
+                Some(WebhookModule::new(url, OPTS.webhook_alert_role_id))
             } else {
                 None
             },
@@ -630,6 +643,9 @@ impl BotState {
         if let Some(module) = &self.disc_jockey {
             modules.push(module);
         };
+        if let Some(module) = &self.webhook {
+            modules.push(module);
+        };
         modules
     }
 
@@ -644,6 +660,29 @@ impl BotState {
 
     pub fn tasks(&self) -> u64 {
         self.root_task_group.lock().remaining()
+    }
+
+    pub fn wait_on_webhooks_and_exit(&self, exit_code: i32) {
+        if let Some(webhook) = self.webhook.clone() {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                webhook.queue_open.store(false, Ordering::Relaxed);
+                let started = tokio::time::Instant::now();
+                loop {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    if webhook.queue.lock().is_empty() && !webhook.sending_message.load(Ordering::Relaxed) {
+                        info!("Webhook is done sending messages. Quitting now!");
+                        std::process::exit(exit_code);
+                    }
+                    if started.elapsed() > Duration::from_secs(3) {
+                        warn!("Waited too long on webhook. Quitting now!");
+                        std::process::exit(exit_code);
+                    }
+                }
+            });
+        } else {
+            std::process::exit(exit_code);
+        }
     }
 }
 
@@ -715,6 +754,12 @@ async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
             .with_context(|| format!("Handling {}", module.name()))?;
     }
     if let Some(ref module) = bot_state.disc_jockey {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.webhook {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
