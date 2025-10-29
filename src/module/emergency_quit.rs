@@ -146,7 +146,7 @@ impl Module for EmergencyQuitModule {
                             return Ok(());
                         }
                         warn!(
-                            "My Health got below {:.02} (is {:.02}! Disconnecting and quitting...",
+                            "My Health got below {:.02} (is {:.02})! Disconnecting and quitting...",
                             self.hp_threshold, packet.health
                         );
                         if let Some(position) = bot.get_component::<Position>() {
@@ -160,7 +160,7 @@ impl Module for EmergencyQuitModule {
                             String::new()
                         };
                         bot_state.webhook_alert(format!(
-                            "`❤️‍🩹` My Health got below {:.02} (is {:.02}! Disconnecting and quitting...{last_damage_event_suffix}",
+                            "`❤️‍🩹` My Health got below {:.02} (is {:.02})! Disconnecting and quitting...{last_damage_event_suffix}",
                             self.hp_threshold, packet.health
                         ));
                         bot.disconnect();
