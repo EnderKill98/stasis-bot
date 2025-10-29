@@ -901,7 +901,7 @@ async fn swarm_rejoin(swarm: Swarm, state: SwarmState, account: Account, join_op
         info!("Reconnecting after {} seconds...", reconnect_after_secs);
 
         tokio::time::sleep(Duration::from_secs(reconnect_after_secs)).await;
-        reconnect_after_secs = (reconnect_after_secs * 2).min(60 * 30); // 2x or max 30 minutes
+        reconnect_after_secs = (reconnect_after_secs * 2).min(60 * 15); // 2x or max 15 minutes
 
         info!("Joining again...");
         match swarm.add_with_opts(&account, state.clone(), &join_opts).await {
