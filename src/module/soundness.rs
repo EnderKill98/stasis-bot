@@ -12,7 +12,6 @@ use azalea::world::MinecraftEntityId;
 use azalea::{Client, Event, GameProfileComponent, ResourceLocation};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -43,7 +42,7 @@ impl Default for InGameStatus {
 pub struct SoundnessModule {
     pub status: Arc<Mutex<InGameStatus>>,
     pub last_damage_event: Arc<Mutex<Option<(Instant, String)>>>,
-    pub interrupt_next_tick: Arc<AtomicBool>,
+    //pub interrupt_next_tick: Arc<AtomicBool>,
 }
 
 impl SoundnessModule {
@@ -126,7 +125,8 @@ impl Module for SoundnessModule {
                     bot_state.webhook(format!("`👞` Kick: {reason}"));
                 }
                 if matches!(*self.status.lock(), InGameStatus::Disconnected) {
-                    self.interrupt_next_tick.store(true, Ordering::Relaxed);
+                    //self.interrupt_next_tick.store(true, Ordering::Relaxed);
+                    self.interrupt(&mut bot, bot_state)?;
                 }
                 self.update_status(bot_state, InGameStatus::Disconnected);
             }
@@ -134,7 +134,8 @@ impl Module for SoundnessModule {
                 ClientboundGamePacket::Login(packet) => {
                     if packet.common.game_type == GameMode::Spectator {
                         if matches!(*self.status.lock(), InGameStatus::Disconnected) {
-                            self.interrupt_next_tick.store(true, Ordering::Relaxed);
+                            //self.interrupt_next_tick.store(true, Ordering::Relaxed);
+                            self.interrupt(&mut bot, bot_state)?;
                         }
                         self.update_status(&bot_state, InGameStatus::InLimbo { title: None, subtitle: None });
                     } else {
@@ -172,7 +173,8 @@ impl Module for SoundnessModule {
                 ClientboundGamePacket::Respawn(packet) => {
                     if packet.common.game_type == GameMode::Spectator {
                         if matches!(*self.status.lock(), InGameStatus::Disconnected) {
-                            self.interrupt_next_tick.store(true, Ordering::Relaxed);
+                            //self.interrupt_next_tick.store(true, Ordering::Relaxed);
+                            self.interrupt(&mut bot, bot_state)?;
                         }
                         self.update_status(&bot_state, InGameStatus::InLimbo { title: None, subtitle: None });
                     } else {
@@ -263,11 +265,11 @@ impl Module for SoundnessModule {
                     info!("You died!");
                 }
             }
-            Event::Tick => {
+            /*Event::Tick => {
                 if self.interrupt_next_tick.fetch_and(false, Ordering::Relaxed) {
                     self.interrupt(&mut bot, bot_state)?;
                 }
-            }
+            }*/
             _ => {}
         }
         Ok(())

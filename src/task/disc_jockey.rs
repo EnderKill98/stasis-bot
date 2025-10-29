@@ -1014,7 +1014,6 @@ impl Task for DiscJockeyTask {
     }
 
     fn new_task_waiting(&mut self, _bot: Client, _bot_state: &BotState) -> anyhow::Result<()> {
-        info!("NEW TASK");
         self.another_task_added = true;
         Ok(())
     }
@@ -1029,6 +1028,7 @@ impl Task for DiscJockeyTask {
             }
             _ => {}
         }
+        self.stop(bot, bot_state)?;
         Ok(())
     }
 }
