@@ -883,7 +883,7 @@ async fn swarm_rejoin(swarm: Swarm, state: SwarmState, account: Account, join_op
         if last_refreshed > Duration::from_secs(/*3h*/ 60 * 60 * 3)
             && let Some(access_token) = account.access_token.clone()
         {
-            info!("This account's access token is more than hours old. Refreshing it!");
+            info!("This account's access token is more than 3 hours old. Refreshing it!");
             let auth_result = auth().await;
             match auth_result {
                 Ok(result) => {
