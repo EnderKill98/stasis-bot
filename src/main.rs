@@ -671,7 +671,7 @@ impl BotState {
         if let Some(webhook) = &self.webhook {
             webhook.webhook_alert(message);
         } else {
-            info!("Webhook module not active. Message: {}", message.as_ref());
+            debug!("Alert Webhook-Message (not enabled): {}", message.as_ref());
         }
     }
 
@@ -679,7 +679,7 @@ impl BotState {
         if let Some(webhook) = &self.webhook {
             webhook.webhook_silent(message);
         } else {
-            info!("Webhook module not active. Message: {}", message.as_ref());
+            debug!("Silent Webhook-Message (not enabled): {}", message.as_ref());
         }
     }
 
@@ -687,7 +687,7 @@ impl BotState {
         if let Some(webhook) = &self.webhook {
             webhook.webhook(message);
         } else {
-            info!("Webhook-Message (not enabled): {}", message.as_ref());
+            debug!("Webhook-Message (not enabled): {}", message.as_ref());
         }
     }
 
