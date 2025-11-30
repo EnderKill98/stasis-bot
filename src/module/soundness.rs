@@ -1,15 +1,12 @@
-use crate::BotState;
 use crate::module::Module;
 use crate::task::Task;
 use crate::task::group::TaskGroup;
+use crate::{BotState, entity_util};
 use azalea::core::game_type::GameMode;
-use azalea::ecs::query::With;
-use azalea::entity::EntityKind;
-use azalea::entity::metadata::CustomName;
 use azalea::protocol::packets::game::ClientboundGamePacket;
 use azalea::protocol::packets::game::c_damage_event::OptionalEntityId;
 use azalea::world::MinecraftEntityId;
-use azalea::{Client, Event, GameProfileComponent, ResourceLocation};
+use azalea::{Client, Event, ResourceLocation};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,27 +44,6 @@ pub struct SoundnessModule {
 }
 
 impl SoundnessModule {
-    pub fn describe(bot: &mut Client, entity_id: i32) -> String {
-        let entity = bot.entity_by::<With<EntityKind>, (&MinecraftEntityId,)>(|(id,): &(&MinecraftEntityId,)| id.0 == entity_id);
-        if entity.is_none() {
-            return format!("<Unknown entity {entity_id}>");
-        }
-        let entity = entity.unwrap();
-        let kind = bot.entity_component::<EntityKind>(entity);
-        let kind = kind.0.to_string().split(":").collect::<Vec<_>>()[1].to_owned();
-
-        if let Some(profile) = bot.get_entity_component::<GameProfileComponent>(entity) {
-            return format!("{} (uuid: {}, id: {entity_id})", profile.name, profile.uuid);
-        }
-
-        match bot.get_entity_component::<CustomName>(entity) {
-            Some(CustomName(Some(custom_name))) => {
-                format!("{custom_name} (type: {kind}, id: {entity_id})")
-            }
-            _ => format!("{kind} ({entity_id})"),
-        }
-    }
-
     fn update_status(&self, bot_state: &BotState, new_status: InGameStatus) {
         let mut old_status = self.status.lock();
         if *old_status != new_status {
@@ -242,12 +218,16 @@ impl Module for SoundnessModule {
                                 format!(
                                     "Received {} damage by {} using {}",
                                     attack_type,
-                                    Self::describe(&mut bot, source_cause as i32),
-                                    Self::describe(&mut bot, source_direct_id as i32)
+                                    entity_util::describe_by_id(&mut bot, source_cause as i32).unwrap_or_else(|_| "Err".to_string()),
+                                    entity_util::describe_by_id(&mut bot, source_direct_id as i32).unwrap_or_else(|_| "Err".to_string())
                                 )
                             }
                             (OptionalEntityId(Some(source_cause)), OptionalEntityId(None)) => {
-                                format!("Received {} damage by {}", attack_type, Self::describe(&mut bot, source_cause as i32))
+                                format!(
+                                    "Received {} damage by {}",
+                                    attack_type,
+                                    entity_util::describe_by_id(&mut bot, source_cause as i32).unwrap_or_else(|_| "Err".to_string())
+                                )
                             }
                             _ => {
                                 format!("Received {} damage", attack_type)

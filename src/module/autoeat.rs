@@ -24,12 +24,12 @@ impl Default for AutoEatModule {
 }
 
 impl AutoEatModule {
-    fn has_eat_task(&self) -> bool {
-        if let Some(eat_task) = self.eating_task.lock().as_ref() {
+    pub fn has_eat_task(&self) -> bool {
+        /*if let Some(eat_task) = self.eating_task.lock().as_ref() {
             debug!("Eat Task: {:?}", eat_task.status());
         } else {
             debug!("Eat Task: None!!");
-        }
+        }*/
         self.eating_task.lock().as_ref().map(|t| !t.status().is_finished()).unwrap_or(false)
     }
 }

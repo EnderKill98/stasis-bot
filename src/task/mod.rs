@@ -1,4 +1,5 @@
 pub mod affect_block;
+pub mod attack;
 pub mod center;
 pub mod close_inventory_and_sync;
 pub mod delay_duration;

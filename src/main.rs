@@ -4,6 +4,7 @@
 mod blockpos_string;
 pub mod commands;
 pub mod devnet;
+pub mod entity_util;
 pub mod module;
 pub mod nbs_format;
 pub mod task;
@@ -19,6 +20,7 @@ use crate::module::chat::ChatModule;
 use crate::module::devnet_handler::DevNetIntegrationModule;
 use crate::module::disc_jockey::DiscJockeyModule;
 use crate::module::emergency_quit::EmergencyQuitModule;
+use crate::module::killaura::KillauraModule;
 use crate::module::legacy_stasis::LegacyStasisModule;
 use crate::module::look_at_players::LookAtPlayersModule;
 use crate::module::periodic_swing::PeriodicSwingModule;
@@ -223,6 +225,10 @@ struct Opts {
     /// Seems that azalea currently has issues getting the correct damage types.
     /// Use this as a workaround on 1.21.4
     use_hardcoded_damage_types: bool,
+
+    #[clap(long)]
+    /// Automatically attack dangerous entities
+    killaura: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -567,6 +573,7 @@ pub struct BotState {
     chat: Option<ChatModule>,
     disc_jockey: Option<DiscJockeyModule>,
     webhook: Option<WebhookModule>,
+    killaura: Option<KillauraModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -605,6 +612,7 @@ impl Default for BotState {
             } else {
                 None
             },
+            killaura: default_if(OPTS.killaura),
         }
     }
 }
@@ -649,6 +657,9 @@ impl BotState {
             modules.push(module);
         };
         if let Some(module) = &self.disc_jockey {
+            modules.push(module);
+        };
+        if let Some(module) = &self.killaura {
             modules.push(module);
         };
         modules
@@ -789,6 +800,12 @@ async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
             .with_context(|| format!("Handling {}", module.name()))?;
     }
     if let Some(ref module) = bot_state.disc_jockey {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.killaura {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
