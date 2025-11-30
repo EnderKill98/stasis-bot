@@ -89,16 +89,11 @@ pub mod tune {
             None
         }
 
-        pub fn can_reach(own_eye_pos: Vec3, for_tuning: bool, has_scaffolding_in_hotbar: bool, pos: BlockPos) -> bool {
-            let modern_reach_dist: f64 = if for_tuning && crate::OPTS.grim && !has_scaffolding_in_hotbar {
-                4.5
-            } else {
-                5.5
-            };
-            if util::squared_magnitude(util::aabb_from_blockpos(&pos), own_eye_pos) > modern_reach_dist.powi(2) {
+        pub fn can_reach(own_eye_pos: Vec3, pos: BlockPos) -> bool {
+            if util::squared_magnitude(util::aabb_from_blockpos(&pos), own_eye_pos) > 5.5 * 5.5 {
                 return false; // Too far (default survival interact range for MC 1.20.5+)
             }
-            if pos.center().distance_squared_to(&own_eye_pos) > 6.0f64.powi(2) {
+            if pos.center().distance_squared_to(&own_eye_pos) > 6.0 * 6.0 {
                 return false; // Too far (until MC 1.20.4)
             }
             true
@@ -134,7 +129,6 @@ pub mod tune {
             let own_eye_pos = util::own_eye_pos(bot).ok_or(anyhow!("No eyepos"))?;
             let own_block_pos = own_pos.to_block_pos_floor();
 
-            let has_scaffolding_in_hotbar = Tuner::find_scaffolding_in_hotbar(bot).is_some();
             let world = bot.world();
             let world = world.read();
 
@@ -145,7 +139,7 @@ pub mod tune {
                 for z_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7] {
                     for y_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7] {
                         let pos = BlockPos::new(own_block_pos.x + x_offset, own_block_pos.y + y_offset, own_block_pos.z + z_offset);
-                        if !Self::can_reach(own_eye_pos, true, has_scaffolding_in_hotbar, pos) {
+                        if !Self::can_reach(own_eye_pos, pos) {
                             continue; // Too far
                         }
 
@@ -257,12 +251,8 @@ pub mod tune {
             match event {
                 Event::Tick => {
                     if let Some(block_hit) = self.waiting_block_hit.take() {
-                        let scaffolding_hotbar_slot = if crate::OPTS.grim { Self::find_scaffolding_in_hotbar(bot) } else { None };
-                        let current_hotbar_slot = if crate::OPTS.grim {
-                            bot.map_get_component(|maybe_inv| maybe_inv.map(|inv: &Inventory| inv.selected_hotbar_slot))
-                        } else {
-                            None
-                        };
+                        let scaffolding_hotbar_slot = Self::find_scaffolding_in_hotbar(bot);
+                        let current_hotbar_slot = bot.map_get_component(|maybe_inv| maybe_inv.map(|inv: &Inventory| inv.selected_hotbar_slot));
 
                         let mut ecs = bot.ecs.lock();
                         if let Some(current_hotbar_slot) = current_hotbar_slot
@@ -706,7 +696,7 @@ impl DiscJockeyTask {
                 bail!("Failed to get position for Note {:?}!", detailed_note.note)
             }
             let pos = pos.unwrap();
-            if !Tuner::can_reach(own_eye_pos, false, false /*Don't care*/, *pos) {
+            if !Tuner::can_reach(own_eye_pos, *pos) {
                 bail!("Went out of range for a block!")
             }
 

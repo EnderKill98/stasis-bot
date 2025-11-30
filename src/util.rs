@@ -127,7 +127,6 @@ impl Goal for InteractableGoal {
         // Without AC, can safely do 5.5
         //best_worst_magnitude <= 4.5f64.powi(2)
         best_worst_magnitude <= 4.5f64.powi(2)
-        //best_worst_magnitude <= if crate::OPTS.grim { 4.5f64.powi(2) } else { 5.5f64.powi(2) } // Could cause issues for old configs
     }
 }
 
