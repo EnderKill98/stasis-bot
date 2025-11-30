@@ -223,6 +223,10 @@ struct Opts {
     /// Seems that azalea currently has issues getting the correct damage types.
     /// Use this as a workaround on 1.21.4
     use_hardcoded_damage_types: bool,
+
+    #[clap(long)]
+    /// Alter some checks to work better on servers with grim
+    grim: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());

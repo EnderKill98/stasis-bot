@@ -27,10 +27,14 @@ pub mod tune {
     use crate::util;
     use anyhow::{Context, anyhow, bail};
     use azalea::entity::Position;
+    use azalea::inventory::Inventory;
     use azalea::packet::game::SendPacketEvent;
     use azalea::protocol::packets::game::s_interact::InteractionHand;
     use azalea::protocol::packets::game::s_use_item_on::BlockHit;
-    use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundGamePacket, ServerboundPingRequest, ServerboundSwing, ServerboundUseItemOn};
+    use azalea::protocol::packets::game::{
+        ClientboundGamePacket, ServerboundGamePacket, ServerboundPingRequest, ServerboundSetCarriedItem, ServerboundSwing, ServerboundUseItemOn,
+    };
+    use azalea::registry::Item;
     use azalea::world::Instance;
     use azalea::{BlockPos, Client, Event, Vec3};
     use rand::Rng;
@@ -70,14 +74,34 @@ pub mod tune {
             }
         }
 
-        pub fn can_reach(own_eye_pos: Vec3, pos: BlockPos) -> bool {
-            if util::squared_magnitude(util::aabb_from_blockpos(&pos), own_eye_pos) > 5.5 * 5.5 {
-                false // Too far (default survival interact range for MC 1.20.5+)
-            } else if pos.center().distance_squared_to(&own_eye_pos) > 6.0 * 6.0 {
-                false // Too far (until MC 1.20.4)
-            } else {
-                true
+        pub fn find_scaffolding_in_hotbar(bot: &mut Client) -> Option<u8> {
+            // Find first hotbar slot with scaffolding
+            let inv = match bot.get_component::<Inventory>() {
+                Some(inv) => inv,
+                None => return None,
+            };
+            let inv_menu = inv.inventory_menu;
+            for (hotbar_slot, slot) in inv_menu.hotbar_slots_range().enumerate() {
+                if inv_menu.slot(slot).map(|stack| stack.kind() == Item::Scaffolding).unwrap_or(false) {
+                    return Some(hotbar_slot as u8);
+                }
             }
+            None
+        }
+
+        pub fn can_reach(own_eye_pos: Vec3, for_tuning: bool, has_scaffolding_in_hotbar: bool, pos: BlockPos) -> bool {
+            let modern_reach_dist: f64 = if for_tuning && crate::OPTS.grim && !has_scaffolding_in_hotbar {
+                4.5
+            } else {
+                5.5
+            };
+            if util::squared_magnitude(util::aabb_from_blockpos(&pos), own_eye_pos) > modern_reach_dist.powi(2) {
+                return false; // Too far (default survival interact range for MC 1.20.5+)
+            }
+            if pos.center().distance_squared_to(&own_eye_pos) > 6.0f64.powi(2) {
+                return false; // Too far (until MC 1.20.4)
+            }
+            true
         }
 
         pub fn is_occluded(ecs: &Instance, pos: &BlockPos, instrument: &NbsInstrument) -> bool {
@@ -110,6 +134,7 @@ pub mod tune {
             let own_eye_pos = util::own_eye_pos(bot).ok_or(anyhow!("No eyepos"))?;
             let own_block_pos = own_pos.to_block_pos_floor();
 
+            let has_scaffolding_in_hotbar = Tuner::find_scaffolding_in_hotbar(bot).is_some();
             let world = bot.world();
             let world = world.read();
 
@@ -120,7 +145,7 @@ pub mod tune {
                 for z_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7] {
                     for y_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7] {
                         let pos = BlockPos::new(own_block_pos.x + x_offset, own_block_pos.y + y_offset, own_block_pos.z + z_offset);
-                        if !Self::can_reach(own_eye_pos, pos) {
+                        if !Self::can_reach(own_eye_pos, true, has_scaffolding_in_hotbar, pos) {
                             continue; // Too far
                         }
 
@@ -232,7 +257,25 @@ pub mod tune {
             match event {
                 Event::Tick => {
                     if let Some(block_hit) = self.waiting_block_hit.take() {
+                        let scaffolding_hotbar_slot = if crate::OPTS.grim { Self::find_scaffolding_in_hotbar(bot) } else { None };
+                        let current_hotbar_slot = if crate::OPTS.grim {
+                            bot.map_get_component(|maybe_inv| maybe_inv.map(|inv: &Inventory| inv.selected_hotbar_slot))
+                        } else {
+                            None
+                        };
+
                         let mut ecs = bot.ecs.lock();
+                        if let Some(current_hotbar_slot) = current_hotbar_slot
+                            && let Some(scaffolding_hotbar_slot) = scaffolding_hotbar_slot
+                            && current_hotbar_slot != scaffolding_hotbar_slot
+                        {
+                            ecs.send_event(SendPacketEvent {
+                                sent_by: bot.entity,
+                                packet: ServerboundGamePacket::SetCarriedItem(ServerboundSetCarriedItem {
+                                    slot: scaffolding_hotbar_slot as u16,
+                                }),
+                            });
+                        }
                         ecs.send_event(SendPacketEvent {
                             sent_by: bot.entity,
                             packet: ServerboundGamePacket::UseItemOn(ServerboundUseItemOn {
@@ -247,6 +290,17 @@ pub mod tune {
                                 hand: InteractionHand::MainHand,
                             }),
                         });
+                        if let Some(current_hotbar_slot) = current_hotbar_slot
+                            && let Some(scaffolding_hotbar_slot) = scaffolding_hotbar_slot
+                            && current_hotbar_slot != scaffolding_hotbar_slot
+                        {
+                            ecs.send_event(SendPacketEvent {
+                                sent_by: bot.entity,
+                                packet: ServerboundGamePacket::SetCarriedItem(ServerboundSetCarriedItem {
+                                    slot: current_hotbar_slot as u16,
+                                }),
+                            });
+                        }
                     }
 
                     if self.wanted.is_empty() {
@@ -652,7 +706,7 @@ impl DiscJockeyTask {
                 bail!("Failed to get position for Note {:?}!", detailed_note.note)
             }
             let pos = pos.unwrap();
-            if !Tuner::can_reach(own_eye_pos, *pos) {
+            if !Tuner::can_reach(own_eye_pos, false, false /*Don't care*/, *pos) {
                 bail!("Went out of range for a block!")
             }
 
