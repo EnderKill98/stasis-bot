@@ -72,11 +72,6 @@ impl Task for AttackTask {
                     reason: format!("Target has no physics: {}", self.target_name),
                 });
             }
-            if !bot.get_entity_component::<Physics>(self.target).is_some() {
-                return Ok(TaskOutcome::Failed {
-                    reason: format!("Target has no physics: {}", self.target_name),
-                });
-            }
 
             let entity_interaction_range = entity_util::own_entity_interaction_range(&bot);
             // Fail when out of reach
