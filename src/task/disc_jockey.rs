@@ -26,7 +26,6 @@ pub mod tune {
     use crate::nbs_format::{NbsInstrument, NbsNote, NbsPitch};
     use crate::util;
     use anyhow::{Context, anyhow, bail};
-    use azalea::entity::Position;
     use azalea::inventory::Inventory;
     use azalea::packet::game::SendPacketEvent;
     use azalea::protocol::packets::game::s_interact::InteractionHand;
@@ -125,9 +124,10 @@ pub mod tune {
         }
 
         pub fn search_notes(bot: &mut Client) -> anyhow::Result<HashMap<NbsInstrument, HashMap<BlockPos, NbsPitch>>> {
-            let own_pos = Vec3::from(&bot.component::<Position>());
+            //let own_pos = Vec3::from(&bot.component::<Position>());
             let own_eye_pos = util::own_eye_pos(bot).ok_or(anyhow!("No eyepos"))?;
-            let own_block_pos = own_pos.to_block_pos_floor();
+            //let own_block_pos = own_pos.to_block_pos_floor();
+            let own_eye_block_pos = own_eye_pos.to_block_pos_floor();
 
             let world = bot.world();
             let world = world.read();
@@ -138,7 +138,7 @@ pub mod tune {
             for x_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7] {
                 for z_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7] {
                     for y_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7] {
-                        let pos = BlockPos::new(own_block_pos.x + x_offset, own_block_pos.y + y_offset, own_block_pos.z + z_offset);
+                        let pos = BlockPos::new(own_eye_block_pos.x + x_offset, own_eye_block_pos.y + y_offset, own_eye_block_pos.z + z_offset);
                         if !Self::can_reach(own_eye_pos, pos) {
                             continue; // Too far
                         }
