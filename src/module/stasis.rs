@@ -12,7 +12,8 @@ use crate::util::InteractableGoal;
 use crate::{BotState, OPTS};
 use anyhow::{Context, anyhow, bail};
 use azalea::blocks::Block;
-use azalea::blocks::properties::Open;
+use azalea::blocks::properties::{FacingCubic, Open};
+use azalea::core::direction::Direction;
 use azalea::ecs::entity::Entity;
 use azalea::ecs::prelude::With;
 use azalea::entity::metadata::{EnderPearl, Player};
@@ -23,12 +24,12 @@ use azalea::pathfinder::goals;
 use azalea::protocol::packets::game::c_animate::AnimationAction;
 use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundContainerButtonClick, ServerboundGamePacket};
 use azalea::registry::EntityKind;
-use azalea::world::MinecraftEntityId;
+use azalea::world::{Instance, MinecraftEntityId};
 use azalea::{BlockPos, Client, Event, GameProfileComponent, Vec3};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLockReadGuard};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::ops::Add;
+use std::ops::{Add, Sub};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -86,6 +87,16 @@ pub enum StasisChamberDefinition {
         trigger_pos: BlockPos,
         delay_ticks: u32,
     },
+    MultiPullPickles {
+        #[serde(with = "blockpos_string")]
+        throw_pos: BlockPos,
+        #[serde(with = "blockpos_string")]
+        pickles_pos: BlockPos,
+        #[serde(with = "blockpos_string")]
+        pull_trigger_pos: BlockPos,
+        #[serde(with = "blockpos_string")]
+        align_trigger_pos: BlockPos,
+    },
 }
 
 impl StasisChamberDefinition {
@@ -97,6 +108,7 @@ impl StasisChamberDefinition {
             Self::RedcoderShay { .. } => "RedcoderShay",
             Self::RedstoneSingleTrigger { .. } => "RedstoneSingleTrigger",
             Self::RedstoneDoubleTrigger { .. } => "RedstoneDoubleTrigger",
+            Self::MultiPullPickles { .. } => "MultiPearlPickles",
         }
     }
 
@@ -111,7 +123,12 @@ impl StasisChamberDefinition {
             }
             | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: rough_pos, .. }
             | StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: rough_pos, .. } => *rough_pos,
+            StasisChamberDefinition::MultiPullPickles { throw_pos: rough_pos, .. } => *rough_pos,
         }
+    }
+
+    pub fn can_be_pulled_multiple_times(&self) -> bool {
+        matches!(self, Self::MultiPullPickles { .. })
     }
 }
 
@@ -254,21 +271,113 @@ impl StasisModule {
         *self.last_idle_pos.lock() = Self::current_block_pos(bot);
     }
 
+    fn find_observer_trigger_for_block(world: &RwLockReadGuard<Instance>, target_block: BlockPos) -> Option<BlockPos> {
+        // TODO: Account for observers strong powering through ordinary, full blocks, pisitons and nother madness.
+        // Tbh i might never care, this is madness enough.
+
+        let mut current_pos = target_block;
+        let mut previous_pos = target_block;
+        let mut at_least_one_observer = false;
+        'search_loop: loop {
+            if let Some(state) = world.get_block_state(&current_pos) {
+                let block = Box::<dyn Block>::from(state);
+                let block_id = block.id();
+                //info!("Current block: {}", block_id);
+                if at_least_one_observer && block_id.ends_with("lever")
+                    || (block_id.ends_with("_trapdoor") && !block_id.ends_with("iron_trapdoor"))
+                    || block_id.ends_with("_button")
+                    || block_id.ends_with("note_block")
+                    || block_id.ends_with("_fence_gate")
+                    || block_id.ends_with("barrel")
+                {
+                    // Some right-clickable blocks that can trigger observers (reasonable and that I could think of)
+                    return Some(current_pos);
+                } else if current_pos == target_block
+                    || block_id.ends_with("redstone_lamp")
+                    || block_id.ends_with("observer")
+                    || block_id.ends_with("_trapdoor")
+                    || block_id.ends_with("note_block")
+                    || block_id.ends_with("fence_gate")
+                    || block_id.ends_with("powered_rail")
+                    || block_id.ends_with("activator_rail")
+                    || block_id.ends_with("redstone")
+                    || block_id.ends_with("target")
+                {
+                    // Target block or some that observers can trigger through
+
+                    for dir in [
+                        Direction::Up,
+                        Direction::Down,
+                        Direction::East,
+                        Direction::South,
+                        Direction::West,
+                        Direction::North,
+                    ] {
+                        let maybe_observer_pos = current_pos.offset_with_direction(dir);
+                        if maybe_observer_pos == previous_pos {
+                            continue; // Don't return
+                        }
+                        if let Some(state) = world.get_block_state(&maybe_observer_pos) {
+                            let block = Box::<dyn Block>::from(state);
+                            let facing = state.property::<FacingCubic>();
+                            if block.id().ends_with("observer")
+                                && let Some(facing) = facing
+                            {
+                                let observer_observing = match facing {
+                                    FacingCubic::East => Direction::East,
+                                    FacingCubic::West => Direction::West,
+                                    FacingCubic::South => Direction::South,
+                                    FacingCubic::North => Direction::North,
+                                    FacingCubic::Up => Direction::Up,
+                                    FacingCubic::Down => Direction::Down,
+                                };
+                                if observer_observing == dir {
+                                    // Observer must be observing from same direction to power this block
+                                    at_least_one_observer = true;
+                                    current_pos = maybe_observer_pos.offset_with_direction(dir);
+                                    previous_pos = maybe_observer_pos;
+                                    continue 'search_loop;
+                                }
+                            }
+                        }
+                    }
+                    return None; // No observer with FacingCubic property found
+                } else {
+                    return None; // Unknown block
+                }
+            } else {
+                return None; // Error: No state
+            }
+        }
+    }
+
     pub fn chamber_for_pearl_pos<'a>(bot: &mut Client, config: &'a mut StasisConfig, pearl_pos: Vec3) -> Option<&'a mut StasisChamberEntry> {
         {
             let world = bot.world();
             let world = world.read();
             let base_pos = pearl_pos.to_block_pos_floor().add(BlockPos::new(0, 8, 0));
-            #[derive(Eq, PartialEq, Copy, Clone)]
+            #[derive(Eq, PartialEq, Copy, Clone, Debug)]
             enum BlockType {
                 Unknown,
                 Trapdoor,
                 BubbleColumn,
                 SoulSand,
+                WaterStill,
+                WaterFlowing,
             }
             let mut last_type = BlockType::Unknown;
+            // For simple or secured trapdoor setup:
             let mut trapdoor_1 = None;
             let mut trapdoor_2 = None;
+
+            // For multipull pickles setup:
+            let mut water_still = None; // Highest block
+            let mut water_flowing = None; // One below where pearls will rest/touch (be technically on pickles block after moving)
+            let mut pickles_pos = None; // Where pearls get aligned against
+            let mut align_trigger_pos = None; // Block to click so a piston aligns pearls to allow the next one to pull user
+            let mut pull_trigger_pos = None; // Block to click so a piston moves a pearl to pull user
+
+            // Both types:
             let mut found_soul_sand = false;
             let mut column_blocks = 0;
             for y_offset_abs in 0..32 {
@@ -281,12 +390,107 @@ impl StasisModule {
                         BlockType::BubbleColumn
                     } else if block.id().ends_with("soul_sand") {
                         BlockType::SoulSand
+                    } else if block.id().ends_with("water")
+                        && let Some(fluid_state) = world.get_fluid_state(&block_pos)
+                    {
+                        if fluid_state.amount == 8 {
+                            BlockType::WaterStill
+                        } else {
+                            BlockType::WaterFlowing
+                        }
                     } else {
                         BlockType::Unknown
                     };
+                    info!("{y_offset_abs}: {block_type:?}");
 
                     let mut reset = false;
                     match block_type {
+                        BlockType::WaterStill => {
+                            column_blocks = 0;
+                            if last_type == BlockType::Unknown && trapdoor_1.is_none() && trapdoor_2.is_none() {
+                                water_still = Some(block_pos);
+                            } else if last_type == BlockType::WaterFlowing || last_type == BlockType::WaterStill {
+                                reset = true;
+                            }
+                        }
+                        BlockType::WaterFlowing => {
+                            column_blocks = 0;
+                            if last_type == BlockType::WaterStill && water_still.is_some() && trapdoor_1.is_none() && trapdoor_2.is_none() {
+                                // A lot of checks here, as this block height should have the pickle and 2 pistons
+
+                                // Try find nearby pickle
+                                water_flowing = Some(block_pos);
+                                pickles_pos = None;
+                                let mut expect_align_piston_at = None;
+                                pull_trigger_pos = None;
+
+                                // Find pickles
+                                for dir in [Direction::East, Direction::South, Direction::West, Direction::North] {
+                                    let nearby_pos = block_pos.offset_with_direction(dir);
+                                    if let Some(state) = world.get_block_state(&nearby_pos) {
+                                        let block = Box::<dyn Block>::from(state);
+                                        if block.id().ends_with("sea_pickle") {
+                                            pickles_pos = Some(nearby_pos);
+                                            expect_align_piston_at = Some(block_pos.offset_with_direction(dir.opposite()));
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if let Some(pickles_pos) = pickles_pos
+                                    && let Some(expect_align_piston_at) = expect_align_piston_at
+                                {
+                                    // Find piston that can move pearls to pickles
+                                    if let Some(state) = world.get_block_state(&expect_align_piston_at) {
+                                        let block = Box::<dyn Block>::from(state);
+                                        if block.id().ends_with("piston") && !block.id().ends_with("sticky_piston") {
+                                            // Found a piston
+                                            let maybe_trigger_pos = Self::find_observer_trigger_for_block(&world, expect_align_piston_at);
+                                            if let Some(found_trigger_pos) = maybe_trigger_pos {
+                                                // Found block to trigger for this piston
+                                                align_trigger_pos = Some(found_trigger_pos);
+                                            }
+                                        } else {
+                                            reset = true; // Expected a piston opposite of pickles!
+                                        }
+                                    } else {
+                                        reset = true; // Failed to get block state
+                                    }
+
+                                    if align_trigger_pos.is_some() {
+                                        // Find piston that could push near pickles (pull pearl)
+                                        for dir in [Direction::East, Direction::South, Direction::West, Direction::North] {
+                                            let nearby_pos = block_pos.offset_with_direction(dir);
+                                            if let Some(state) = world.get_block_state(&nearby_pos) {
+                                                let block = Box::<dyn Block>::from(state);
+                                                if block.id().ends_with("piston") && !block.id().ends_with("sticky_piston") {
+                                                    // Found a piston
+                                                    let delta = pickles_pos.sub(nearby_pos);
+                                                    if delta.x.abs() == 1 && delta.y == 0 && delta.z.abs() == 1 {
+                                                        // Position makes sense for pickles (essentially is a diagonal to pickles block at same y)
+                                                        // Could also check facing, but lazy
+
+                                                        let maybe_trigger_pos = Self::find_observer_trigger_for_block(&world, nearby_pos);
+                                                        if let Some(found_trigger_pos) = maybe_trigger_pos {
+                                                            // Found block to trigger for this piston
+                                                            pull_trigger_pos = Some(found_trigger_pos);
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                reset = true; // Failed to get block state
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if pickles_pos.is_none() || pull_trigger_pos.is_none() || align_trigger_pos.is_none() {
+                                    reset = true;
+                                }
+                            } else if last_type == BlockType::WaterFlowing || last_type == BlockType::WaterStill {
+                                reset = true;
+                            }
+                        }
                         BlockType::Trapdoor => {
                             if last_type == BlockType::Unknown {
                                 trapdoor_1 = Some(block_pos);
@@ -301,7 +505,10 @@ impl StasisModule {
                             }
                         }
                         BlockType::BubbleColumn => {
-                            if last_type == BlockType::BubbleColumn || last_type == BlockType::Trapdoor {
+                            if last_type == BlockType::BubbleColumn
+                                || last_type == BlockType::Trapdoor
+                                || (last_type == BlockType::WaterFlowing && pickles_pos.is_some() && pull_trigger_pos.is_some())
+                            {
                                 column_blocks += 1;
                             } else {
                                 reset = true;
@@ -321,6 +528,9 @@ impl StasisModule {
                     if reset {
                         trapdoor_1 = None;
                         trapdoor_2 = None;
+                        water_still = None;
+                        water_flowing = None;
+                        pickles_pos = None;
                         column_blocks = 0;
                         found_soul_sand = false;
                     }
@@ -328,9 +538,17 @@ impl StasisModule {
                 }
             }
 
-            if trapdoor_1.is_some() && found_soul_sand && column_blocks >= 4 {
+            if trapdoor_1.is_some()
+                && found_soul_sand
+                && column_blocks >= 4
+                && water_flowing.is_none()
+                && water_still.is_none()
+                && pickles_pos.is_none()
+                && pull_trigger_pos.is_none()
+                && align_trigger_pos.is_none()
+            {
                 info!(
-                    "Found satisfactory stasis chamber setup at {} with {}, a {column_blocks} block long bubble column and soul sand",
+                    "Found satisfactory trapdoor stasis chamber setup at {} with {}, a {column_blocks} block long bubble column and soul sand",
                     trapdoor_1.unwrap(),
                     if trapdoor_1.is_some() && trapdoor_2.is_some() {
                         "two trapdoors"
@@ -371,7 +589,9 @@ impl StasisModule {
                                 definition.type_name()
                             );
                             match chamber.definition {
-                                StasisChamberDefinition::FlippableTrapdoor { .. } | StasisChamberDefinition::SecuredFlippableTrapdoor { .. } => {
+                                StasisChamberDefinition::FlippableTrapdoor { .. }
+                                | StasisChamberDefinition::SecuredFlippableTrapdoor { .. }
+                                | StasisChamberDefinition::MultiPullPickles { .. } => {
                                     warn!("Removing old definition (assuming trapdoors moved)!");
                                     remove_chambers_indices.push(chamber_index);
                                 }
@@ -402,6 +622,76 @@ impl StasisModule {
                     warn!("Failed to detect stasis definition near {pearl_pos:?} for some reason (trapdoor1: {trapdoor_1:?}, trapdoor2: {trapdoor_2:?})!");
                     return None;
                 }
+            } else if water_still.is_some()
+                && water_flowing.is_some()
+                && pickles_pos.is_some()
+                && pull_trigger_pos.is_some()
+                && align_trigger_pos.is_some()
+                && found_soul_sand
+                && column_blocks >= 4
+                && trapdoor_1.is_none()
+                && trapdoor_2.is_none()
+            {
+                info!(
+                    "Found satisfactory multipull pickles stasis chamber setup at {} with pickles at {}, pull trigger at {}, align trigger at {}, a {column_blocks} block long bubble column and soul sand",
+                    water_still.unwrap(),
+                    pickles_pos.unwrap(),
+                    pull_trigger_pos.unwrap(),
+                    align_trigger_pos.unwrap(),
+                );
+                let definition = StasisChamberDefinition::MultiPullPickles {
+                    throw_pos: water_still.unwrap(),
+                    pull_trigger_pos: pull_trigger_pos.unwrap(),
+                    align_trigger_pos: align_trigger_pos.unwrap(),
+                    pickles_pos: pickles_pos.unwrap(),
+                };
+
+                let rough_pos = water_still.unwrap();
+                // Find close, but wrong definition
+
+                let mut remove_chambers_indices = Vec::new();
+                for (chamber_index, chamber) in config.chambers.iter().enumerate() {
+                    let existing_rough_pos = chamber.definition.rough_pos();
+                    if chamber.definition != definition
+                        && rough_pos.x == existing_rough_pos.x
+                        && rough_pos.z == existing_rough_pos.z
+                        && (rough_pos.y - existing_rough_pos.y).abs() <= 5
+                    {
+                        warn!(
+                            "Detected an existing close chamber definition ({}) where new one ({}) is supposed to be at roughly {rough_pos}!",
+                            chamber.definition.type_name(),
+                            definition.type_name()
+                        );
+                        match chamber.definition {
+                            StasisChamberDefinition::FlippableTrapdoor { .. }
+                            | StasisChamberDefinition::SecuredFlippableTrapdoor { .. }
+                            | StasisChamberDefinition::MultiPullPickles { .. } => {
+                                warn!("Removing old definition (assuming trapdoors moved)!");
+                                remove_chambers_indices.push(chamber_index);
+                            }
+                            _ => {
+                                return None;
+                            }
+                        }
+                    }
+                }
+                for (chamber_index_index, chamber_index) in remove_chambers_indices.into_iter().enumerate() {
+                    config.chambers.remove(chamber_index - chamber_index_index);
+                }
+                if let Some(chamber_index) = config.chambers.iter_mut().position(|chamber| chamber.definition == definition) {
+                    let chamber = &mut config.chambers[chamber_index];
+                    info!(
+                        "Found existing, matching pickles stasis chamber definition ({}) at {rough_pos}!",
+                        chamber.definition.type_name()
+                    );
+                    return Some(chamber);
+                }
+
+                // Make new chamber
+                info!("Added new chamber definition: {definition:?}");
+                config.chambers.push(StasisChamberEntry { definition, occupants: vec![] });
+                let chamber_len = config.chambers.len();
+                return config.chambers.get_mut(chamber_len - 1);
             }
         }
 
@@ -729,17 +1019,20 @@ impl StasisModule {
         }
 
         match definition {
-            StasisChamberDefinition::FlippableTrapdoor { trapdoor_pos }
+            StasisChamberDefinition::FlippableTrapdoor { trapdoor_pos: trigger_pos }
             | StasisChamberDefinition::SecuredFlippableTrapdoor {
-                trigger_trapdoor_pos: trapdoor_pos,
+                trigger_trapdoor_pos: trigger_pos,
                 ..
+            }
+            | StasisChamberDefinition::MultiPullPickles {
+                pull_trigger_pos: trigger_pos, ..
             } => {
-                let trapdoor_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(InteractableGoal::new(trapdoor_pos)));
+                let trigger_goal: Arc<BoxedPathfindGoal> = Arc::new(BoxedPathfindGoal::new(InteractableGoal::new(trigger_pos)));
                 let return_goal = goals::BlockPosGoal(self.return_pos(&mut bot.clone()).expect("No return pos"));
                 let greeting = format!("Welcome back, {occupant}!");
 
                 let mut group = TaskGroup::new(format!("Pull {occupant}'s chamber"));
-                group = group.with(PathfindTask::new_concrete(!OPTS.no_mining, trapdoor_goal, format!("near {occupant}'s Pearl")));
+                group = group.with(PathfindTask::new_concrete(!OPTS.no_mining, trigger_goal, format!("near {occupant}'s Pearl")));
 
                 // Has closed security trapdoor: open it
                 if let StasisChamberDefinition::SecuredFlippableTrapdoor { security_trapdoor_pos, .. } = definition
@@ -747,6 +1040,36 @@ impl StasisModule {
                     && !state.property::<Open>().unwrap_or(false)
                 {
                     group.add(AffectBlockTask::new(security_trapdoor_pos)); // Open security trapdoor
+                }
+
+                // Multipull has pearls at throw pos, should trigger align trigger to move to pickle poss
+                if let StasisChamberDefinition::MultiPullPickles {
+                    align_trigger_pos, throw_pos, ..
+                } = definition
+                {
+                    let mut any_pearls_at_throw_pos = false;
+                    for chamber in &self.config.lock().chambers {
+                        if chamber.definition == definition {
+                            for occupant in &chamber.occupants {
+                                let pearl_entity = bot.entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(entity_uuid,): &(&EntityUuid,)| {
+                                    Some(***entity_uuid) == occupant.pearl_uuid
+                                });
+                                if let Some(pearl_entity) = pearl_entity
+                                    && let Some(pearl_pos) = bot.get_entity_component::<Position>(pearl_entity)
+                                {
+                                    let pearl_block_pos = pearl_pos.to_block_pos_floor();
+                                    if pearl_block_pos.x == throw_pos.x && pearl_block_pos.z == throw_pos.z {
+                                        any_pearls_at_throw_pos = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if any_pearls_at_throw_pos {
+                        group = group.with(AffectBlockTask::new(align_trigger_pos)).with(DelayTicksTask::new(40)); // Wait some time (2s)
+                    }
                 }
 
                 let mut trigger_group = TaskGroup::new_with_hide_fail("Check and trigger", true);
@@ -782,6 +1105,10 @@ impl StasisModule {
                     Ok(())
                 }));
                 let mut bot_clone = bot.clone();
+                let is_trigger_a_flippable_trapdoor = matches!(
+                    definition,
+                    StasisChamberDefinition::FlippableTrapdoor { .. } | StasisChamberDefinition::SecuredFlippableTrapdoor { .. }
+                );
                 trigger_group = trigger_group
                     .with(OnceFuncTask::new("Add expected despawning pearls", move |_bot, _bot_state| {
                         let mut expect_despawn_of = self_clone.expect_despawn_of.lock();
@@ -790,7 +1117,7 @@ impl StasisModule {
                         });
                         Ok(())
                     }))
-                    .with(AffectBlockTask::new(trapdoor_pos))
+                    .with(AffectBlockTask::new(trigger_pos))
                     .with(OnceFuncTask::new(format!("Greet {occupant}"), move |_bot, _bot_state| {
                         feedback(false, &greeting);
                         Ok(())
@@ -800,10 +1127,10 @@ impl StasisModule {
                         Ok(())
                     }));
 
-                if self.do_reopen_trapdoor {
+                if self.do_reopen_trapdoor && is_trigger_a_flippable_trapdoor {
                     trigger_group = trigger_group
                         .with(DelayTicksTask::new(Self::recommended_closed_trapdoor_ticks(bot_state)))
-                        .with(AffectBlockTask::new(trapdoor_pos))
+                        .with(AffectBlockTask::new(trigger_pos))
                 }
 
                 group.add(trigger_group);
@@ -1180,6 +1507,7 @@ impl Module for StasisModule {
                                     | StasisChamberDefinition::RedcoderShay { base_pos: pos, .. } => pos,
                                     StasisChamberDefinition::RedstoneSingleTrigger { base_pos: pos, .. } => pos,
                                     StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: pos, .. } => pos,
+                                    StasisChamberDefinition::MultiPullPickles { pickles_pos: pos, .. } => pos,
                                 };
 
                                 let own_pos = Vec3::from(&bot.component::<Position>());
