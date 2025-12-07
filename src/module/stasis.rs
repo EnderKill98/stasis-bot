@@ -399,7 +399,6 @@ impl StasisModule {
                     } else {
                         BlockType::Unknown
                     };
-                    info!("{y_offset_abs}: {block_type:?}");
 
                     let mut reset = false;
                     match block_type {
