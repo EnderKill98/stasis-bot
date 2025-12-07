@@ -288,7 +288,6 @@ impl StasisModule {
                     || block_id.ends_with("_button")
                     || block_id.ends_with("note_block")
                     || block_id.ends_with("_fence_gate")
-                    || block_id.ends_with("barrel")
                 {
                     // Some right-clickable blocks that can trigger observers (reasonable and that I could think of)
                     return Some(current_pos);
@@ -301,7 +300,6 @@ impl StasisModule {
                     || block_id.ends_with("powered_rail")
                     || block_id.ends_with("activator_rail")
                     || block_id.ends_with("redstone")
-                    || block_id.ends_with("target")
                 {
                     // Target block or some that observers can trigger through
 
