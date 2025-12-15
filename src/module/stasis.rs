@@ -14,6 +14,7 @@ use anyhow::{Context, anyhow, bail};
 use azalea::blocks::Block;
 use azalea::blocks::properties::{FacingCubic, Open};
 use azalea::core::direction::Direction;
+use azalea::core::position::ChunkPos;
 use azalea::ecs::entity::Entity;
 use azalea::ecs::prelude::With;
 use azalea::entity::metadata::{EnderPearl, Player};
@@ -969,6 +970,7 @@ impl StasisModule {
                     remove_occupant_indices.push(occupant_index);
                     warn!("Remove uncertain occupant preemptively (no player uuid, likely thrown while offline): {occupant:?}");
                 } else if pearl_not_found && let Some(pearl_uuid) = occupant.pearl_uuid
+                    && bot.world().read().chunks.get(&ChunkPos::new(definition.rough_pos().x >> 4, definition.rough_pos().z >> 4)).is_some()
                     && definition.rough_pos().center().horizontal_distance_squared_to(&Vec3::from(&bot.component::<Position>())) <= 58f64.powi(2) /*In range by ~6 blocks */
                     && bot.entity_by::<With<EnderPearl>, (&EntityUuid,)>(|(uuid,): &(&EntityUuid,)| pearl_uuid == ***uuid).is_none()
                 {
