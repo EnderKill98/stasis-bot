@@ -1,6 +1,7 @@
 use crate::BotState;
 use azalea::{Client, Event};
 
+pub mod auto_tpa;
 pub mod autoeat;
 pub mod chat;
 pub mod devnet_handler;

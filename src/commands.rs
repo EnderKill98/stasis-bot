@@ -66,7 +66,6 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
                     "!eat",
                     "!yaw",
                     "!pitch",
-                    "!dj",
                 ]);
                 if OPTS.enable_pos_command {
                     commands.push("!pos");
@@ -74,6 +73,15 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
                 if bot_state.stasis.is_some() {
                     commands.push("!stasis-rt");
                     commands.push("!stasis-rte");
+                }
+                if bot_state.auto_tpa.is_some() {
+                    commands.push("!tpahere");
+                    if sender_is_admin {
+                        commands.push("!tpatrust");
+                    }
+                }
+                if bot_state.disc_jockey.is_some() {
+                    commands.push("!dj")
                 }
             }
             if !OPTS.admin.is_empty() {
@@ -790,6 +798,97 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
             }
             let dj = bot_state.disc_jockey.as_ref().unwrap();
             crate::module::disc_jockey::execute_dj_command(bot, bot_state, sender, command, args, feedback, dj, sender_is_admin).await?;
+            Ok(true)
+        }
+
+        "tpatrust" => {
+            if bot_state.auto_tpa.is_none() {
+                feedback("AutoTpa is not active!");
+                return Ok(true);
+            }
+            if !sender_is_admin {
+                feedback("Sorry, but you need to be specified as an admin to use this command!");
+                return Ok(true);
+            }
+
+            let auto_tpa = bot_state.auto_tpa.as_ref().unwrap();
+            if args.len() != 2 {
+                feedback("Usage: !tpatrust add/rm NAME");
+                return Ok(true);
+            }
+
+            let cmd = &args[0];
+            let name = &args[1];
+            let uuid = bot
+                .tab_list()
+                .iter()
+                .find(|(_, e)| e.profile.name.eq_ignore_ascii_case(name))
+                .map(|(_, e)| e.profile.uuid);
+
+            if uuid.is_none() {
+                feedback("The player must be online for me to find out their UUID.");
+                return Ok(true);
+            }
+            let uuid = uuid.unwrap();
+
+            if cmd.eq_ignore_ascii_case("add") {
+                if auto_tpa.trusted.lock().insert(uuid) {
+                    feedback(&format!("The player {name} is now trusted for TPAs to me."));
+                    if let Err(err) = auto_tpa.save_trusted().await {
+                        error!("Failed to save trusted uuids for TPAs: {err:?}");
+                    }
+                } else {
+                    feedback(&format!("The player {name} is already trusted for TPAs."));
+                }
+                return Ok(true);
+            }
+
+            if cmd.eq_ignore_ascii_case("rm") {
+                if auto_tpa.trusted.lock().remove(&uuid) {
+                    feedback(&format!("The player {name} is no longer trusted for TPAs to me."));
+                    if let Err(err) = auto_tpa.save_trusted().await {
+                        error!("Failed to save trusted uuids for TPAs: {err:?}");
+                    }
+                } else {
+                    feedback(&format!("The player {name} was not trusted for TPAs to begin with."));
+                }
+                return Ok(true);
+            }
+
+            Ok(true)
+        }
+
+        "tpahere" => {
+            if bot_state.auto_tpa.is_none() {
+                feedback("AutoTpa is not active!");
+                return Ok(true);
+            }
+            if bot_state.chat.is_none() {
+                feedback("Chat is not active!");
+                return Ok(true);
+            }
+
+            let auto_tpa = bot_state.auto_tpa.as_ref().unwrap();
+
+            let uuid = bot
+                .tab_list()
+                .iter()
+                .find(|(_, e)| e.profile.name.eq_ignore_ascii_case(&sender))
+                .map(|(_, e)| e.profile.uuid);
+
+            if uuid.is_none() {
+                feedback("I could not figure out your UUID!");
+                return Ok(true);
+            }
+            let uuid = uuid.unwrap();
+
+            if !auto_tpa.trusted.lock().contains(&uuid) {
+                feedback(&format!(
+                    "You are not trusted. Ask an admin of me to add you by messaging me \"!tpatrust add {sender}\"."
+                ));
+            }
+
+            bot_state.chat.as_ref().unwrap().cmd(format!("/tpahere {sender}"));
             Ok(true)
         }
 

@@ -26,8 +26,14 @@ const DAMAGE_TYPES: &[&'static str] = &[
 #[derive(Clone, Eq, PartialEq)]
 pub enum InGameStatus {
     Disconnected,
-    InLimbo { title: Option<String>, subtitle: Option<String> },
-    InGame { when: Instant },
+    InLimbo {
+        title: Option<String>,
+        subtitle: Option<String>,
+        action: Option<String>,
+    },
+    InGame {
+        when: Instant,
+    },
 }
 
 impl Default for InGameStatus {
@@ -48,17 +54,51 @@ impl SoundnessModule {
         let mut old_status = self.status.lock();
         if *old_status != new_status {
             match new_status {
-                InGameStatus::Disconnected => bot_state.webhook("`🔴` Disconnected!"),
-                InGameStatus::InLimbo { ref title, ref subtitle } => {
-                    if let Some(title) = title {
-                        bot_state.webhook(format!("`🟣` In Limbo: {title}"))
-                    } else if let Some(subtitle) = subtitle {
-                        bot_state.webhook(format!("`🟣` In Limbo: {subtitle}"))
+                InGameStatus::Disconnected => {
+                    if bot_state.webhook.is_some() {
+                        bot_state.webhook("`🔴` Disconnected!");
                     } else {
-                        bot_state.webhook("`🟣` In Limbo!")
+                        info!("Disconnected!")
                     }
                 }
-                InGameStatus::InGame { .. } => bot_state.webhook("`🟢` In Game!"),
+                InGameStatus::InLimbo {
+                    ref title,
+                    ref subtitle,
+                    ref action,
+                } => {
+                    if let Some(title) = title {
+                        if bot_state.webhook.is_some() {
+                            bot_state.webhook(format!("`🟣` In Limbo: {title}"));
+                        } else {
+                            info!("In Limbo: {title}");
+                        }
+                    } else if let Some(subtitle) = subtitle {
+                        if bot_state.webhook.is_some() {
+                            bot_state.webhook(format!("`🟣` In Limbo: {subtitle}"));
+                        } else {
+                            info!("In Limbo: {subtitle}");
+                        }
+                    } else if let Some(action) = action {
+                        if bot_state.webhook.is_some() {
+                            bot_state.webhook(format!("`🟣` In Limbo: {action}"));
+                        } else {
+                            info!("In Limbo: {action}");
+                        }
+                    } else {
+                        if bot_state.webhook.is_some() {
+                            bot_state.webhook("`🟣` In Limbo!");
+                        } else {
+                            info!("In Limbo!")
+                        }
+                    }
+                }
+                InGameStatus::InGame { .. } => {
+                    if bot_state.webhook.is_some() {
+                        bot_state.webhook("`🟢` In Game!");
+                    } else {
+                        info!("In Game!");
+                    }
+                }
             }
             *old_status = new_status;
         }
@@ -109,18 +149,25 @@ impl Module for SoundnessModule {
             }
             Event::Packet(packet) => match packet.as_ref() {
                 ClientboundGamePacket::Login(packet) => {
-                    if packet.common.game_type == GameMode::Spectator {
-                        if matches!(*self.status.lock(), InGameStatus::Disconnected) {
+                    if packet.common.game_type == GameMode::Spectator || packet.common.game_type == GameMode::Adventure {
+                        if matches!(*self.status.lock(), InGameStatus::Disconnected | InGameStatus::InGame { .. }) {
                             self.interrupt_next_tick.store(true, Ordering::Relaxed);
                             //self.interrupt(&mut bot, bot_state)?;
                         }
-                        self.update_status(&bot_state, InGameStatus::InLimbo { title: None, subtitle: None });
+                        self.update_status(
+                            &bot_state,
+                            InGameStatus::InLimbo {
+                                title: None,
+                                subtitle: None,
+                                action: None,
+                            },
+                        );
                     } else {
                         self.update_status(&bot_state, InGameStatus::InGame { when: Instant::now() });
                     }
                 }
                 ClientboundGamePacket::SetTitleText(packet) => {
-                    info!("Title Text: {}", packet.text);
+                    debug!("Title Text: {}", packet.text);
                     let status = self.status.lock().clone();
                     if let InGameStatus::InLimbo { subtitle, .. } = status {
                         let title = packet.text.to_string();
@@ -129,12 +176,13 @@ impl Module for SoundnessModule {
                             InGameStatus::InLimbo {
                                 title: if title.is_empty() { None } else { Some(title) },
                                 subtitle,
+                                action: None, // Clear
                             },
                         );
                     }
                 }
                 ClientboundGamePacket::SetSubtitleText(packet) => {
-                    info!("Subttitle Text: {}", packet.text);
+                    debug!("Subttitle Text: {}", packet.text);
                     let status = self.status.lock().clone();
                     if let InGameStatus::InLimbo { title, .. } = status {
                         let subtitle = packet.text.to_string();
@@ -143,17 +191,44 @@ impl Module for SoundnessModule {
                             InGameStatus::InLimbo {
                                 title,
                                 subtitle: if subtitle.is_empty() { None } else { Some(subtitle) },
+                                action: None, // Clear
                             },
                         );
                     }
                 }
+                ClientboundGamePacket::SetActionBarText(packet) => {
+                    debug!("Action Text: {}", packet.text.to_string());
+                    let status = self.status.lock().clone();
+                    if let InGameStatus::InLimbo { title, subtitle, .. } = status {
+                        let action = packet.text.to_string();
+                        if title.is_none() && subtitle.is_none() {
+                            // Only use if no title, nor subtitle
+                            // Used by RealmSMP / AJQueue
+                            self.update_status(
+                                &bot_state,
+                                InGameStatus::InLimbo {
+                                    title,
+                                    subtitle,
+                                    action: if action.is_empty() { None } else { Some(action) },
+                                },
+                            );
+                        }
+                    }
+                }
                 ClientboundGamePacket::Respawn(packet) => {
-                    if packet.common.game_type == GameMode::Spectator {
-                        if matches!(*self.status.lock(), InGameStatus::Disconnected) {
+                    if packet.common.game_type == GameMode::Spectator || packet.common.game_type == GameMode::Adventure {
+                        if matches!(*self.status.lock(), InGameStatus::Disconnected | InGameStatus::InGame { .. }) {
                             self.interrupt_next_tick.store(true, Ordering::Relaxed);
                             //self.interrupt(&mut bot, bot_state)?;
                         }
-                        self.update_status(&bot_state, InGameStatus::InLimbo { title: None, subtitle: None });
+                        self.update_status(
+                            &bot_state,
+                            InGameStatus::InLimbo {
+                                title: None,
+                                subtitle: None,
+                                action: None,
+                            },
+                        );
                     } else {
                         if !matches!(*self.status.lock(), InGameStatus::InGame { .. }) {
                             self.update_status(&bot_state, InGameStatus::InGame { when: Instant::now() });

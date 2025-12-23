@@ -31,18 +31,18 @@ impl VisualRangeModule {
                     .await
                     .context("Read seen uuids from file")?,
             )
-            .context("Parsing stasis-config content")?;
+            .context("Parsing seen uuids content")?;
             info!("Loaded seen uuids from file.");
         } else {
             *self.seen.lock() = Default::default();
             warn!("File for seen uuids doesn't exist, yet (saving default one).");
-            self.save_config().await?;
+            self.save_trusted().await?;
         };
 
         Ok(())
     }
 
-    pub async fn save_config(&self) -> anyhow::Result<()> {
+    pub async fn save_trusted(&self) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&*self.seen.as_ref().lock()).context("Convert seen uuids to json")?;
         tokio::fs::write(Self::seen_path(), json).await.context("Save seen uuids to file")?;
         Ok(())
@@ -81,7 +81,7 @@ impl Module for VisualRangeModule {
                             seen.insert(packet.uuid);
                             let self_clone = self.clone();
                             tokio::spawn(async move {
-                                if let Err(err) = self_clone.save_config().await {
+                                if let Err(err) = self_clone.save_trusted().await {
                                     error!("Failed to save seen uuids: {err:?}");
                                 }
                             });

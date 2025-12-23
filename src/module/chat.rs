@@ -123,7 +123,11 @@ impl ChatModule {
 
     fn send_command_now(bot: &mut Client, command: String) {
         let command = if command.starts_with("/") { &command[1..] } else { &command }; // Remove leading /
-        let command = if command.len() > 255 { &command[..255] } else { &command }; // Truncate
+        let command = if command.len() > OPTS.max_command_length {
+            &command[..OPTS.max_command_length]
+        } else {
+            &command
+        }; // Truncate
         bot.send_command_packet(command);
         debug!("Sent command: {command}");
     }
@@ -190,7 +194,13 @@ impl Module for ChatModule {
                 // Very security and sane way to find out, if message was a dm to self.
                 // Surely no way to cheese it..
                 let mut dm = None;
-                if message.starts_with('[') && message.contains("-> me] ") {
+                if message.starts_with("✉⬇ MSG (") && message.contains(&format!(" ➺ {}", bot.username())) {
+                    // RealmSMP
+                    dm = Some((
+                        message["✉⬇ MSG (".len()..].split(" ").next().unwrap().to_owned(),
+                        message.split(&format!(" ➺ {}) ", bot.username())).collect::<Vec<_>>()[1].to_owned(),
+                    ));
+                } else if message.starts_with('[') && message.contains("-> me] ") {
                     // Common format used by Essentials and other custom plugins: [Someone -> me] Message
                     dm = Some((
                         message.split(" ").next().unwrap()[1..].to_owned(),

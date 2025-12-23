@@ -29,7 +29,11 @@ impl Module for LookAtPlayersModule {
         match event {
             Event::Tick => {
                 // Look at players
-                if !pathfind::is_pathfinding(&bot) && bot_state.tasks() == 0 && bot.get_component::<Inventory>().map(|inv| inv.id == 0).unwrap_or(true) {
+                if !pathfind::is_pathfinding(&bot)
+                    && bot_state.tasks() == 0
+                    && bot.get_component::<Inventory>().map(|inv| inv.id == 0).unwrap_or(true)
+                    && bot_state.soundness.as_ref().map(|s| s.is_ingame()).unwrap_or(false)
+                {
                     let my_entity_id = bot.entity_component::<MinecraftEntityId>(bot.entity).0;
                     let my_eye_pos = match util::own_eye_pos(&bot) {
                         Some(pos) => pos,

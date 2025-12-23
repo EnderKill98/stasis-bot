@@ -15,6 +15,7 @@ extern crate tracing;
 
 use crate::blockpos_string::BlockPosString;
 use crate::module::Module;
+use crate::module::auto_tpa::AutoTpaModule;
 use crate::module::autoeat::AutoEatModule;
 use crate::module::chat::ChatModule;
 use crate::module::devnet_handler::DevNetIntegrationModule;
@@ -229,6 +230,26 @@ struct Opts {
     #[clap(long)]
     /// Automatically attack dangerous entities
     killaura: bool,
+
+    #[clap(long)]
+    /// Allows defining trusted players who can request a /tpahere via !tpahere.
+    /// Additionally the bot will try to auto-accept tpa requests from such users.
+    /// Manage trusted players with "!tpatrust add/rm NAME" (admins only)
+    auto_tpa: bool,
+
+    #[clap(long, default_value = "/tpaccept {NAME}")]
+    /// Command used by AutoTpa for accepting a teleport.
+    /// %NAME% will be replaced by the sender if present.
+    tpa_accept_command: String,
+
+    #[clap(long, default_value = "/tpdeny")]
+    /// Command used by AutoTpa for denying a teleport.
+    /// {NAME} will be replaced by the sender if present.
+    tpa_deny_command: String,
+
+    #[clap(long, default_value = "255")]
+    /// Max length for any commands (will get truncated if too long)
+    max_command_length: usize,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -574,6 +595,7 @@ pub struct BotState {
     disc_jockey: Option<DiscJockeyModule>,
     webhook: Option<WebhookModule>,
     killaura: Option<KillauraModule>,
+    auto_tpa: Option<AutoTpaModule>,
 }
 
 fn default_if<T: Default>(enabled: bool) -> Option<T> {
@@ -613,6 +635,7 @@ impl Default for BotState {
                 None
             },
             killaura: default_if(OPTS.killaura),
+            auto_tpa: default_if(OPTS.auto_tpa),
         }
     }
 }
@@ -660,6 +683,9 @@ impl BotState {
             modules.push(module);
         };
         if let Some(module) = &self.killaura {
+            modules.push(module);
+        }
+        if let Some(module) = &self.auto_tpa {
             modules.push(module);
         };
         modules
@@ -806,6 +832,12 @@ async fn handle(bot: Client, event: Event, bot_state: BotState) -> Result<()> {
             .with_context(|| format!("Handling {}", module.name()))?;
     }
     if let Some(ref module) = bot_state.killaura {
+        module
+            .handle(bot.clone(), &event, &bot_state)
+            .await
+            .with_context(|| format!("Handling {}", module.name()))?;
+    }
+    if let Some(ref module) = bot_state.auto_tpa {
         module
             .handle(bot.clone(), &event, &bot_state)
             .await
