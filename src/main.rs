@@ -85,6 +85,10 @@ struct Opts {
     #[clap(short = 'H', long, alias = "autolog-hp")]
     emergency_quit: Option<f32>,
 
+    /// Be more paranoid about quitting (old behavior which often prevents rejoining and regenerating).
+    #[clap(long)]
+    emergency_quit_strict: bool,
+
     /// Workaround for crashes: Forbid the bot from sending any messages to players.
     #[clap(short = 'q', long)]
     quiet: bool,
@@ -615,7 +619,7 @@ impl Default for BotState {
             visual_range: Some(Default::default()),
             look_at_players: OPTS.look_at_players.map(|dist| LookAtPlayersModule::new(dist)),
             soundness: Some(Default::default()),
-            emergency_quit: OPTS.emergency_quit.map(|hp| EmergencyQuitModule::new(hp)),
+            emergency_quit: OPTS.emergency_quit.map(|hp| EmergencyQuitModule::new(hp, OPTS.emergency_quit_strict)),
             devnet_integration: default_if(OPTS.devnet_url.is_some() && OPTS.devnet_access_token.is_some()),
             server_tps: Some(Default::default()),
             stasis: if !OPTS.no_stasis {

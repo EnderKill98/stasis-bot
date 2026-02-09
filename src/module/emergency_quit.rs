@@ -13,14 +13,19 @@ use tokio::time::Instant;
 #[derive(Clone)]
 pub struct EmergencyQuitModule {
     hp_threshold: f32,
+    strict: bool,
 
+    last_hp: Arc<Mutex<f32>>,
     ignore_until: Arc<Mutex<Option<Instant>>>,
 }
 
 impl EmergencyQuitModule {
-    pub fn new(hp_threshold: f32) -> Self {
+    pub fn new(hp_threshold: f32, strict: bool) -> Self {
         Self {
             hp_threshold,
+            strict,
+
+            last_hp: Arc::new(Mutex::new(0.0)),
             ignore_until: Default::default(),
         }
     }
@@ -52,6 +57,7 @@ impl Module for EmergencyQuitModule {
         match event {
             Event::Init | Event::Spawn => {
                 self.ignore_harm_for(Duration::from_secs(2));
+                *self.last_hp.lock() = 0.0;
             }
             Event::Tick => {
                 /*
@@ -128,7 +134,7 @@ impl Module for EmergencyQuitModule {
                     }
                 }
                 ClientboundGamePacket::SetHealth(packet) => {
-                    if packet.health <= self.hp_threshold {
+                    if packet.health <= self.hp_threshold && (self.strict || packet.health < *self.last_hp.lock()) {
                         if bot
                             .tab_list()
                             .get(&bot.uuid())
