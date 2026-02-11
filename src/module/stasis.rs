@@ -351,7 +351,30 @@ impl StasisModule {
     }
 
     pub fn chamber_for_pearl_pos<'a>(bot: &mut Client, config: &'a mut StasisConfig, pearl_pos: Vec3) -> Option<&'a mut StasisChamberEntry> {
+        // Find existing redcoder chamber or others
+        let mut use_existing_chamber_index = None;
         {
+            let pearl_block_pos = pearl_pos.to_block_pos_floor();
+            for (chamber_index, chamber) in config.chambers.iter().enumerate() {
+                match chamber.definition {
+                    StasisChamberDefinition::RedcoderShay { base_pos: existing_pos, .. }
+                    | StasisChamberDefinition::RedcoderTrapdoor {
+                        trapdoor_pos: existing_pos, ..
+                    }
+                    | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: existing_pos, .. }
+                    | StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: existing_pos, .. } => {
+                        if existing_pos.x == pearl_block_pos.x && existing_pos.z == pearl_block_pos.z && (pearl_block_pos.y - existing_pos.y).abs() <= 8 {
+                            info!("Found existing chamber definition ({}) at {existing_pos}.", chamber.definition.type_name());
+                            use_existing_chamber_index = Some(chamber_index);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if use_existing_chamber_index.is_none() {
             let world = bot.world();
             let world = world.read();
             let base_pos = pearl_pos.to_block_pos_floor().add(BlockPos::new(0, 8, 0));
@@ -523,6 +546,7 @@ impl StasisModule {
                         }
                     }
 
+                    last_type = block_type;
                     if reset {
                         trapdoor_1 = None;
                         trapdoor_2 = None;
@@ -531,8 +555,8 @@ impl StasisModule {
                         pickles_pos = None;
                         column_blocks = 0;
                         found_soul_sand = false;
+                        last_type = BlockType::Unknown;
                     }
-                    last_type = block_type;
                 }
             }
 
@@ -693,25 +717,10 @@ impl StasisModule {
             }
         }
 
-        // Find existing redcoder chamber or others
-        let pearl_block_pos = pearl_pos.to_block_pos_floor();
-        for chamber in config.chambers.iter_mut() {
-            match chamber.definition {
-                StasisChamberDefinition::RedcoderShay { base_pos: existing_pos, .. }
-                | StasisChamberDefinition::RedcoderTrapdoor {
-                    trapdoor_pos: existing_pos, ..
-                }
-                | StasisChamberDefinition::RedstoneSingleTrigger { base_pos: existing_pos, .. }
-                | StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: existing_pos, .. } => {
-                    if existing_pos.x == pearl_block_pos.x && existing_pos.z == pearl_block_pos.z && (pearl_block_pos.y - existing_pos.y).abs() <= 8 {
-                        info!("Found existing chamber definition ({}) at {existing_pos}.", chamber.definition.type_name());
-                        return Some(chamber);
-                    }
-                }
-                _ => {}
-            }
+        // As discovered at the beginning (weird this way because of stupid borrow checker, 11 PM me says...)
+        if let Some(index) = use_existing_chamber_index {
+            return config.chambers.get_mut(index);
         }
-
         None
     }
 
