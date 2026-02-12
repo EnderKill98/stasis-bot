@@ -29,6 +29,7 @@ bevy_log = "0.15.2" # Whatever azalea is using
 #azalea = { path = "../azalea/azalea", default-features = false, features = [ "log", "serde" ] }
 azalea = { git = "https://github.com/EnderKill98/azalea", branch = "feature/1.21.4-inventory-backport", default-features = false, features = [ "log", "serde" ] }
 #azalea-viaversion = { git = "https://github.com/EnderKill98/azalea-viaversion.git", branch = "1.21.4" }
+simdnbt = "0.7" # Same version as azalea is using!
 
 parking_lot = { version = "0.12", features = [ "deadlock_detection" ] }
 

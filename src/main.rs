@@ -210,7 +210,7 @@ struct Opts {
 
     /// BlockPos of the noteblocks are to play at (for !dj)
     #[clap(long)]
-    dj_pos: Option<blockpos_string::BlockPosString>,
+    dj_pos: Option<BlockPosString>,
 
     /// Specifiy to only allow any dj commands from admins (otherwise anyone in render distance can use it)
     #[clap(long)]
@@ -254,6 +254,10 @@ struct Opts {
     #[clap(long, default_value = "255")]
     /// Max length for any commands (will get truncated if too long)
     max_command_length: usize,
+
+    #[clap(long)]
+    /// Allow signs to be used to assign unknown pearls with.
+    chambers_use_sign_fallback: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());

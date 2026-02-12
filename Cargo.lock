@@ -3135,6 +3135,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "simdnbt",
  "strip-ansi-escapes",
  "tokio",
  "tokio-tungstenite",

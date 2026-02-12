@@ -24,11 +24,12 @@ use azalea::packet::game::SendPacketEvent;
 use azalea::pathfinder::goals;
 use azalea::protocol::packets::game::c_animate::AnimationAction;
 use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundContainerButtonClick, ServerboundGamePacket};
-use azalea::registry::EntityKind;
+use azalea::registry::{BlockEntityKind, EntityKind};
 use azalea::world::{Instance, MinecraftEntityId};
-use azalea::{BlockPos, Client, Event, GameProfileComponent, Vec3};
+use azalea::{BlockPos, Client, Event, FormattedText, GameProfileComponent, Vec3};
 use parking_lot::{Mutex, RwLockReadGuard};
 use serde::{Deserialize, Serialize};
+use simdnbt::owned::{Nbt, NbtCompound};
 use std::collections::{HashMap, HashSet};
 use std::ops::{Add, Sub};
 use std::path::PathBuf;
@@ -152,6 +153,67 @@ pub struct StasisConfig {
     pub chambers: Vec<StasisChamberEntry>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SignSide {
+    #[allow(dead_code)]
+    has_glowing_text: bool,
+    #[allow(dead_code)]
+    color: String,
+    /// Should always be 4, even if just empty!
+    lines: Vec<FormattedText>,
+}
+
+impl SignSide {
+    pub fn from_nbt(nbt: &NbtCompound) -> anyhow::Result<SignSide> {
+        let has_glowing_text = nbt.get("has_glowing_text").ok_or(anyhow!("Missing has_glowing_text"))?;
+        let color = nbt.get("color").ok_or(anyhow!("Missing color"))?;
+        let messages = nbt.get("messages").ok_or(anyhow!("Missing messages"))?;
+
+        let has_glowing_text = has_glowing_text.byte().ok_or(anyhow!("Not a byte: has_glowing_text"))? != 0;
+        let color = color.string().ok_or(anyhow!("Not a string: color"))?.to_string();
+        let messages = messages
+            .list()
+            .ok_or(anyhow!("Not a list: messages"))?
+            .strings()
+            .ok_or(anyhow!("Not a List of strings: messages"))?
+            .iter()
+            .map(|s| serde_json::from_slice(s.as_bytes()))
+            .collect::<Result<Vec<FormattedText>, serde_json::Error>>()
+            .context("Parse messages as formatted text")?;
+
+        Ok(SignSide {
+            has_glowing_text,
+            color,
+            lines: messages,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SignBlockEntity {
+    front: SignSide,
+    back: SignSide,
+    #[allow(dead_code)]
+    is_waxed: bool,
+}
+
+impl SignBlockEntity {
+    pub fn from_nbt(nbt: &NbtCompound) -> anyhow::Result<SignBlockEntity> {
+        let is_waxed = nbt.get("is_waxed").ok_or(anyhow!("Missing is_waxed"))?;
+        let front_text = nbt.get("front_text").ok_or(anyhow!("Missing front_text"))?;
+        let back_text = nbt.get("back_text").ok_or(anyhow!("Missing back_text"))?;
+
+        let is_waxed = is_waxed.byte().ok_or(anyhow!("Not a byte: is_waxed"))? != 0;
+        let front_text = SignSide::from_nbt(front_text.compound().ok_or(anyhow!("Not a compound: front_text"))?).context("Parse front_text")?;
+        let back_text = SignSide::from_nbt(back_text.compound().ok_or(anyhow!("Not a compound: back_text"))?).context("Parse back_text")?;
+        Ok(SignBlockEntity {
+            is_waxed,
+            front: front_text,
+            back: back_text,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct StasisModule {
     pub do_reopen_trapdoor: bool,
@@ -174,6 +236,7 @@ pub struct StasisModule {
     >,
     pub mass_adding: Arc<Mutex<HashMap<Uuid /*PlayerUuid*/, (String /*LecternRedcoderTerminalId*/, bool /*IsShay*/, usize /*Next index*/)>>>,
     last_task_seen_at: Arc<Mutex<Instant>>,
+    pub sign_cache: Arc<Mutex<HashMap<ChunkPos, HashMap<BlockPos, SignBlockEntity>>>>,
 }
 
 impl StasisModule {
@@ -190,6 +253,7 @@ impl StasisModule {
             remove_occupant_if_player_gets_near: Default::default(),
             mass_adding: Default::default(),
             last_task_seen_at: Arc::new(Mutex::new(Instant::now())),
+            sign_cache: Default::default(),
         }
     }
 
@@ -743,13 +807,13 @@ impl StasisModule {
             }
         }
 
-        if player_pos.to_block_pos_floor().x != pearl_pos.to_block_pos_floor().x
+        /*if player_pos.to_block_pos_floor().x != pearl_pos.to_block_pos_floor().x
             || player_pos.to_block_pos_floor().z != pearl_pos.to_block_pos_floor().z
             || (player_pos.y - pearl_pos.y).abs() >= 5.0
         {
             trace!("Pearl {pearl_uuid} is too far from player. Likely not a throw.");
             return;
-        }
+        }*/
 
         let mut config = self.config.lock();
         let chamber = Self::chamber_for_pearl_pos(bot, &mut config, pearl_pos);
@@ -780,7 +844,7 @@ impl StasisModule {
         });
         let chamber_definition = chamber.definition.clone();
         drop(config);
-        let chambers_ordered = self.get_ordered_chambers(player_uuid);
+        let chambers_ordered = self.get_ordered_chambers(bot, player_name, player_uuid);
         if was_occupants_empty {
             if let Some(chat) = &bot_state.chat {
                 if let Some(max_pearls) = self.max_pearls {
@@ -892,11 +956,12 @@ impl StasisModule {
         }
     }*/
 
-    pub fn get_ordered_chambers(&self, player_uuid: Uuid) -> Vec<StasisChamberDefinition> {
+    pub fn get_ordered_chambers(&self, bot: &mut Client, player_name: &str, player_uuid: Uuid) -> Vec<StasisChamberDefinition> {
         let mut owned_chambers_with_times = HashMap::new();
         // Find definition of chamber with newest thrown pearl
         for chamber in &self.config.lock().chambers {
             let mut newest_time_from_player = None;
+            let mut owned_by_other = false;
             for occupant in &chamber.occupants {
                 if occupant.player_uuid == Some(player_uuid) {
                     if newest_time_from_player
@@ -905,6 +970,66 @@ impl StasisModule {
                         .unwrap_or(true)
                     {
                         newest_time_from_player = Some(occupant.thrown_at);
+                    }
+                } else if occupant.player_uuid.is_some() && occupant.pearl_uuid.is_some() {
+                    owned_by_other = true;
+                }
+            }
+
+            // Find chambers with no clear owner and a labeled sign
+            if OPTS.chambers_use_sign_fallback && newest_time_from_player.is_none() && !owned_by_other && !chamber.occupants.is_empty() {
+                let chamber_pos = match chamber.definition {
+                    StasisChamberDefinition::FlippableTrapdoor { trapdoor_pos: pos }
+                    | StasisChamberDefinition::SecuredFlippableTrapdoor { trigger_trapdoor_pos: pos, .. }
+                    | StasisChamberDefinition::RedcoderTrapdoor { trapdoor_pos: pos, .. }
+                    | StasisChamberDefinition::RedcoderShay { base_pos: pos, .. } => pos,
+                    StasisChamberDefinition::RedstoneSingleTrigger { base_pos: pos, .. } => pos,
+                    StasisChamberDefinition::RedstoneDoubleTrigger { base_pos: pos, .. } => pos,
+                    StasisChamberDefinition::MultiPullPickles { pickles_pos: pos, .. } => pos,
+                };
+
+                let chunk_pos = ChunkPos::new(chamber_pos.x >> 4, chamber_pos.z >> 4);
+                let world = bot.world();
+                let world = world.read();
+                if let Some(signs) = self.sign_cache.lock().get(&chunk_pos) {
+                    'offsets: for y_offset in [0, -1, 1, -2, 2, -3, 3, -4, 4] {
+                        let maybe_sign_pos = BlockPos::new(chamber_pos.x, chamber_pos.y + y_offset, chamber_pos.z);
+                        if let Some(state) = world.get_block_state(&maybe_sign_pos) {
+                            let block = Box::<dyn Block>::from(state);
+                            if !block.id().ends_with("_sign") {
+                                continue; // Not a sign anymore
+                            }
+                        } else {
+                            continue; // No state here
+                        }
+
+                        if let Some(sign_data) = signs.get(&maybe_sign_pos) {
+                            for side in vec![&sign_data.front, &sign_data.back] {
+                                for line in &side.lines {
+                                    if line.to_string().eq_ignore_ascii_case(player_name) {
+                                        // Found name on sign! Use newest pearl time or just now:
+                                        for occupant in &chamber.occupants {
+                                            if newest_time_from_player
+                                                .as_ref()
+                                                .map(|other_time| &occupant.thrown_at > other_time)
+                                                .unwrap_or(true)
+                                            {
+                                                newest_time_from_player = Some(occupant.thrown_at);
+                                            }
+                                        }
+                                        info!(
+                                            "Assuming chamber at {chamber_pos} ({}) is owned by {player_name} ({player_uuid}) because sign at {maybe_sign_pos} contained their name!",
+                                            chamber.definition.type_name(),
+                                        );
+                                        /*if newest_time_from_player.is_none() {
+                                            // Placeholder because we're clueless
+                                            newest_time_from_player = Some(chrono::Local::now());
+                                        }*/
+                                        break 'offsets;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -934,7 +1059,7 @@ impl StasisModule {
             return Ok(());
         }
         let uuid = uuid.unwrap();
-        let chambers_ordered = self.get_ordered_chambers(uuid);
+        let chambers_ordered = self.get_ordered_chambers(bot, &username, uuid);
 
         if chambers_ordered.is_empty() {
             feedback(true, "No chamber found!");
@@ -1390,6 +1515,45 @@ impl StasisModule {
             }
         }
     }
+
+    fn on_block_entity(&self, pos: BlockPos, kind: BlockEntityKind, data: &Nbt) {
+        if !OPTS.chambers_use_sign_fallback {
+            return;
+        }
+        if kind != BlockEntityKind::Sign && kind != BlockEntityKind::HangingSign {
+            return;
+        }
+        let chunk_pos = ChunkPos::new(pos.x >> 4, pos.z >> 4);
+        let mut sign_cache = self.sign_cache.lock();
+        match data {
+            Nbt::None => {
+                let remove_chunk = if let Some(chunk) = sign_cache.get_mut(&chunk_pos) {
+                    if chunk.remove(&pos).is_some() {
+                        trace!("Removed sign data at {pos}.");
+                    } else {
+                        trace!("There was no sign data at {pos}.");
+                    }
+                    chunk.is_empty()
+                } else {
+                    trace!("Chunk for sign at {pos} is not in cache.");
+                    false
+                };
+                if remove_chunk {
+                    sign_cache.remove(&chunk_pos);
+                    trace!("Removed chunk {}, {} from sign cache because it is/became empty.", chunk_pos.x, chunk_pos.z);
+                }
+            }
+            Nbt::Some(data) => match SignBlockEntity::from_nbt(&*data) {
+                Ok(sign) => {
+                    trace!("Sign-Data at {pos}: {sign:?}");
+                    sign_cache.entry(chunk_pos).or_default().insert(pos, sign);
+                }
+                Err(err) => {
+                    warn!("Failed to parse sign block entity at {pos}: {err:?}");
+                }
+            },
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1413,11 +1577,13 @@ impl Module for StasisModule {
                 self.clear_idle_pos("Login-Event");
                 self.spawned_pearl_uuids.lock().clear();
                 self.expect_despawn_of.lock().clear();
+                self.sign_cache.lock().clear();
             }
             Event::Disconnect(_) => {
                 self.clear_idle_pos("Disconnect-Event");
                 self.spawned_pearl_uuids.lock().clear();
                 self.expect_despawn_of.lock().clear();
+                self.sign_cache.lock().clear();
             }
             Event::Packet(packet) => match packet.as_ref() {
                 /*ClientboundGamePacket::PlayerPosition(_) => {
@@ -1426,6 +1592,7 @@ impl Module for StasisModule {
                 ClientboundGamePacket::Respawn(_) => {
                     self.spawned_pearl_uuids.lock().clear();
                     self.expect_despawn_of.lock().clear();
+                    self.sign_cache.lock().clear();
                 }
                 ClientboundGamePacket::AddEntity(packet) => {
                     if packet.entity_type == EntityKind::EnderPearl {
@@ -1675,6 +1842,27 @@ impl Module for StasisModule {
                                 chat.msg(&profile.name, format!("Mass adding finished! Last added index was {}", index - 1))
                             }
                         }
+                    }
+                }
+                ClientboundGamePacket::BlockEntityData(packet) => {
+                    self.on_block_entity(packet.pos, packet.block_entity_type, &packet.tag);
+                }
+                ClientboundGamePacket::LevelChunkWithLight(packet) => {
+                    for block_entity in &packet.chunk_data.block_entities {
+                        self.on_block_entity(
+                            BlockPos::new(
+                                (packet.x << 4) + (block_entity.packed_xz >> 4) as i32,
+                                (block_entity.y as i16) as i32,
+                                (packet.z << 4) + (block_entity.packed_xz & 0x0F) as i32,
+                            ),
+                            block_entity.kind,
+                            &block_entity.data,
+                        );
+                    }
+                }
+                ClientboundGamePacket::ForgetLevelChunk(packet) => {
+                    if self.sign_cache.lock().remove(&packet.pos).is_some() {
+                        trace!("Removed chunk {}, {} from sign cache because chunk got unloaded.", packet.pos.x, packet.pos.z);
                     }
                 }
                 _ => {}
