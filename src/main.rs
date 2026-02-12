@@ -256,8 +256,10 @@ struct Opts {
     max_command_length: usize,
 
     #[clap(long)]
-    /// Allow signs to be used to assign unknown pearls with.
-    chambers_use_sign_fallback: bool,
+    /// Allow signs to be used to infer chamber owners with unknown pearls with.
+    /// Can be handy sometimes, but also is more insecure and should
+    /// hopefully never be needed in a "normal" scenario.
+    use_chamber_signs: bool, // Fix your shit, 2b!
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());

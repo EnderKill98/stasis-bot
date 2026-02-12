@@ -977,7 +977,7 @@ impl StasisModule {
             }
 
             // Find chambers with no clear owner and a labeled sign
-            if OPTS.chambers_use_sign_fallback && newest_time_from_player.is_none() && !owned_by_other && !chamber.occupants.is_empty() {
+            if OPTS.use_chamber_signs && newest_time_from_player.is_none() && !owned_by_other && !chamber.occupants.is_empty() {
                 let chamber_pos = match chamber.definition {
                     StasisChamberDefinition::FlippableTrapdoor { trapdoor_pos: pos }
                     | StasisChamberDefinition::SecuredFlippableTrapdoor { trigger_trapdoor_pos: pos, .. }
@@ -1517,7 +1517,7 @@ impl StasisModule {
     }
 
     fn on_block_entity(&self, pos: BlockPos, kind: BlockEntityKind, data: &Nbt) {
-        if !OPTS.chambers_use_sign_fallback {
+        if !OPTS.use_chamber_signs {
             return;
         }
         if kind != BlockEntityKind::Sign && kind != BlockEntityKind::HangingSign {
