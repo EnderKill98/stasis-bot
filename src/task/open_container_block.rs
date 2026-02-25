@@ -3,6 +3,7 @@ use crate::{BotState, util};
 use anyhow::anyhow;
 use azalea::container::ContainerClientExt;
 use azalea::entity::LookDirection;
+use azalea::movement::LastSentLookDirection;
 use azalea::packet::game::SendPacketEvent;
 use azalea::protocol::packets::game::s_interact::InteractionHand;
 use azalea::protocol::packets::game::{ClientboundGamePacket, ServerboundGamePacket, ServerboundSwing, ServerboundUseItemOn};
@@ -40,6 +41,24 @@ impl OpenContainerBlockTask {
             got_inventory_data: false,
         }
     }
+
+    fn look_at_container(&self, bot: &mut Client) -> anyhow::Result<()> {
+        // Make sure to send location
+        // Sometimes grim changes yaw/pitch to 0/0 and the bot doesn't notice and re-attempts not looking at the block
+        let look_at_block = util::nice_blockhit_look(&util::own_eye_pos(&bot).ok_or(anyhow!("No own_eye_pos"))?, &self.block_pos);
+
+        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No last sent lookdir"))? = LastSentLookDirection { x_rot: 0.1, y_rot: 0.1 }; // Force new packet to be sent
+        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_at_block;
+        Ok(())
+    }
+
+    fn max_attempts(bot_state: &BotState) -> usize {
+        if bot_state.server_tps.as_ref().and_then(|tps| tps.current_tps()).unwrap_or(20.0) <= 12.0 {
+            15
+        } else {
+            5
+        }
+    }
 }
 
 impl Display for OpenContainerBlockTask {
@@ -49,16 +68,15 @@ impl Display for OpenContainerBlockTask {
 }
 
 impl Task for OpenContainerBlockTask {
-    fn start(&mut self, bot: Client, _bot_state: &BotState) -> anyhow::Result<()> {
+    fn start(&mut self, mut bot: Client, _bot_state: &BotState) -> anyhow::Result<()> {
         self.started_at = Instant::now();
         self.orig_look_dir = bot.component();
 
-        let look_at_block = util::nice_blockhit_look(&util::own_eye_pos(&bot).ok_or(anyhow!("No own_eye_pos"))?, &self.block_pos);
-        *bot.ecs.lock().get_mut(bot.entity).ok_or(anyhow!("No lookdir"))? = look_at_block;
+        self.look_at_container(&mut bot)?;
         Ok(())
     }
 
-    fn handle(&mut self, bot: Client, _bot_state: &BotState, event: &Event) -> anyhow::Result<TaskOutcome> {
+    fn handle(&mut self, mut bot: Client, bot_state: &BotState, event: &Event) -> anyhow::Result<TaskOutcome> {
         if let Event::Tick = event {
             /*let eye_pos = util::own_eye_pos(&bot);
             let pos_at_block = util::closest_aabb_pos_towards(eye_pos, util::aabb_from_blockpos(self.block_pos), 0.2);
@@ -111,39 +129,49 @@ impl Task for OpenContainerBlockTask {
                 match (self.got_inventory_data, self.got_container_menu) {
                     (false, false) => {
                         if got_open_packet_at.elapsed() >= Duration::from_secs(5) {
-                            if self.attempt <= 2 {
+                            let max_attempts = Self::max_attempts(bot_state);
+                            if self.attempt < max_attempts {
                                 warn!(
-                                    "Did neither receive inventory data, nor a container_menu handle 5s after receiving OpenScreen packet. This is attempt {}. Re-attempting...!",
-                                    self.attempt
+                                    "Did neither receive inventory data, nor a container_menu handle 5s after receiving OpenScreen packet. This is attempt {}/{}. Re-attempting...!",
+                                    self.attempt + 1,
+                                    max_attempts
                                 );
                                 // Re-attempt
                                 self.attempt += 1;
                                 self.did_interact = false;
                                 self.got_open_packet_at = None;
                                 self.started_at = Instant::now();
+                                self.look_at_container(&mut bot)?;
                             } else {
                                 return Ok(TaskOutcome::Failed {
-                                    reason: "Did neither receive inventory data, nor a container_menu handle 5s after receiving OpenScreen packet. And ran out of attempts!".to_owned(),
+                                    reason: format!(
+                                        "Did neither receive inventory data, nor a container_menu handle 5s after receiving OpenScreen packet. And ran out of attempts ({max_attempts})!"
+                                    ),
                                 });
                             }
                         }
                     }
                     (true, false) => {
                         if got_open_packet_at.elapsed() >= Duration::from_secs(10) {
-                            if self.attempt <= 2 {
+                            let max_attempts = Self::max_attempts(bot_state);
+                            if self.attempt < max_attempts {
                                 warn!(
-                                    "Did receive inventory data, but no container_menu handle 10s after receiving OpenScreen packet. This is attempt {}. Re-attempting...!",
-                                    self.attempt
+                                    "Did receive inventory data, but no container_menu handle 10s after receiving OpenScreen packet. This is attempt {}/{}. Re-attempting...!",
+                                    self.attempt + 1,
+                                    max_attempts
                                 );
                                 // Re-attempt
                                 self.attempt += 1;
                                 self.did_interact = false;
                                 self.got_open_packet_at = None;
                                 self.started_at = Instant::now();
+                                self.look_at_container(&mut bot)?;
                             } else {
                                 return Ok(TaskOutcome::Failed {
-                                        reason: "Did receive inventory data, but no container_menu handle 10s after receiving OpenScreen packet. And ran out of attempts!".to_owned(),
-                                    });
+                                    reason: format!(
+                                        "Did receive inventory data, but no container_menu handle 10s after receiving OpenScreen packet. And ran out of attempts ({max_attempts})!"
+                                    ),
+                                });
                             }
                         }
                     }
@@ -181,19 +209,24 @@ impl Task for OpenContainerBlockTask {
                     }
                 }
             } else if self.started_at.elapsed() >= Duration::from_secs(5) && self.did_interact {
-                if self.attempt <= 2 {
+                let max_attempts = Self::max_attempts(bot_state);
+                if self.attempt < max_attempts {
                     warn!(
-                        "Block not result in a screen open 5s after starting OpenContainerBlockTask. This is attempt {}. Re-attempting...!",
-                        self.attempt + 1
+                        "Block not result in a screen open 5s after starting OpenContainerBlockTask. This is attempt {}/{}. Re-attempting...!",
+                        self.attempt + 1,
+                        max_attempts
                     );
                     // Re-attempt
                     self.attempt += 1;
                     self.did_interact = false;
                     self.got_open_packet_at = None;
                     self.started_at = Instant::now();
+                    self.look_at_container(&mut bot)?;
                 } else {
                     return Ok(TaskOutcome::Failed {
-                        reason: "Block not result in a screen open 5s after starting OpenContainerBlockTask!".to_owned(),
+                        reason: format!(
+                            "Block not result in a screen open 5s after starting OpenContainerBlockTask! And ran out of attempts ({max_attempts})!"
+                        ),
                     });
                 }
             }
