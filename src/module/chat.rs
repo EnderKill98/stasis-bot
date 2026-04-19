@@ -220,6 +220,12 @@ impl Module for ChatModule {
                         message = message[..(message.len() - sender.len())].to_owned();
                     }
                     dm = Some((sender, message));
+                } else if OPTS.public_chat && message.starts_with("<") && message.contains("> ") {
+                    // Recognize "<Sender> !tp BotName" as dm to bot with "!tp"
+                    let sp = message.split("> ").collect::<Vec<_>>();
+                    if sp.len() == 2 && sp[1].eq_ignore_ascii_case(&format!("!tp {}", bot.username())) {
+                        dm = Some((sp[0][1..].to_owned(), "!tp".to_owned()));
+                    }
                 }
 
                 if let Some((sender, content)) = dm {

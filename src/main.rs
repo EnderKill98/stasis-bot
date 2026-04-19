@@ -7,6 +7,7 @@ pub mod devnet;
 pub mod entity_util;
 pub mod module;
 pub mod nbs_format;
+pub mod openauthmod;
 pub mod task;
 pub mod util;
 
@@ -30,6 +31,7 @@ use crate::module::soundness::SoundnessModule;
 use crate::module::stasis::StasisModule;
 use crate::module::visual_range::VisualRangeModule;
 use crate::module::webhook::WebhookModule;
+use crate::openauthmod::OpenAuthModPlugin;
 use crate::task::group::TaskGroup;
 use crate::task::{Task, TaskOutcome};
 use anyhow::{Context, Result};
@@ -260,6 +262,17 @@ struct Opts {
     /// Can be handy sometimes, but also is more insecure and should
     /// hopefully never be needed in a "normal" scenario.
     use_chamber_signs: bool, // Fix your shit, 2b!
+
+    #[clap(long)]
+    /// Basic public chat support.
+    /// Only vanilla chat with "!tp BotName"
+    public_chat: bool,
+
+    #[clap(long)]
+    /// Enable open auth mod support.
+    /// The target server will be able to authenticate your account against any server of its choosing!
+    /// So be sure to trust it!
+    open_auth_mod: bool,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());
@@ -416,6 +429,10 @@ async fn async_main() -> Result<()> {
             std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
         }
 
+        if OPTS.public_chat {
+            info!("Public chat is active. People can request teleports by sending \"!tp BotName\" in chat (assuming vanilla formatting)");
+        }
+
         info!("Admins: {}", OPTS.admin.join(", "));
         info!("Logging in...");
     }
@@ -563,7 +580,7 @@ async fn async_main() -> Result<()> {
             percent: 1.0, // This 1.0 here means "whatever is left over"
         },
     };
-    let builder = azalea::swarm::SwarmBuilder::new_without_plugins()
+    let mut builder = azalea::swarm::SwarmBuilder::new_without_plugins()
         .add_plugins(DefaultPlugins.build().disable::<TaskPoolPlugin>().disable::<LogPlugin>())
         .add_plugins(DefaultBotPlugins)
         .add_plugins(DefaultSwarmPlugins)
@@ -571,6 +588,12 @@ async fn async_main() -> Result<()> {
         .set_handler(handle)
         .set_swarm_handler(swarm_handle)
         .add_account(account.clone());
+    if OPTS.open_auth_mod {
+        builder = builder.add_plugins(OpenAuthModPlugin::start().await);
+        info!(
+            "OpenAuthMod support is active. The target server can authenticate your account against any server of its choosing! Make sure to only use this on servers you trust!"
+        );
+    }
     builder.start(OPTS.server_address.as_str()).await.context("Running swarm")?
 }
 
