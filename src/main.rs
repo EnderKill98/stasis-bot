@@ -263,10 +263,9 @@ struct Opts {
     /// hopefully never be needed in a "normal" scenario.
     use_chamber_signs: bool, // Fix your shit, 2b!
 
-    #[clap(long)]
-    /// Basic public chat support.
-    /// Only vanilla chat with "!tp BotName"
-    public_chat: bool,
+    #[clap(long, use_value_delimiter = true)]
+    /// Allow given commands to be used from public chat
+    public_chat: Vec<String>,
 
     #[clap(long)]
     /// Enable open auth mod support.
@@ -429,8 +428,12 @@ async fn async_main() -> Result<()> {
             std::process::exit(EXITCODE_CONFLICTING_CLI_OPTS);
         }
 
-        if OPTS.public_chat {
-            info!("Public chat is active. People can request teleports by sending \"!tp BotName\" in chat (assuming vanilla formatting)");
+        if !OPTS.public_chat.is_empty() {
+            if OPTS.public_chat.contains(&"*".to_owned()) {
+                info!("All commands are allowed from public chat!");
+            } else {
+                info!("The following commands are allowed from public chat: {:?}", OPTS.public_chat);
+            }
         }
 
         info!("Admins: {}", OPTS.admin.join(", "));

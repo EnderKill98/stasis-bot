@@ -1,5 +1,6 @@
 use crate::module::Module;
 use crate::{BotState, OPTS, commands};
+use anyhow::Context;
 use azalea::protocol::packets::game::ClientboundGamePacket;
 use azalea::{Client, Event};
 use parking_lot::Mutex;
@@ -150,10 +151,10 @@ impl ChatModule {
             match next_message {
                 ChatAction::Message(ingame_message) => match ingame_message.kind {
                     InGameMessageKind::Direct => self.send_msg_now(bot, ingame_message.user, ingame_message.message),
-                    InGameMessageKind::PublicChat => bot.send_chat_packet(&ingame_message.message),
+                    InGameMessageKind::PublicChat => bot.chat(&ingame_message.message),
                 },
                 ChatAction::Command(command) => Self::send_command_now(bot, command),
-                ChatAction::Chat(chat) => bot.send_chat_packet(&chat),
+                ChatAction::Chat(chat) => bot.chat(&chat),
             }
         }
     }
@@ -193,22 +194,25 @@ impl Module for ChatModule {
 
                 // Very security and sane way to find out, if message was a dm to self.
                 // Surely no way to cheese it..
-                let mut dm = None;
+                let mut req: Option<(bool /*Public Chat*/, String /*Sender*/, String /*Content*/)> = None;
                 if message.starts_with("✉⬇ MSG (") && message.contains(&format!(" ➺ {}", bot.username())) {
                     // RealmSMP
-                    dm = Some((
+                    req = Some((
+                        false,
                         message["✉⬇ MSG (".len()..].split(" ").next().unwrap().to_owned(),
                         message.split(&format!(" ➺ {}) ", bot.username())).collect::<Vec<_>>()[1].to_owned(),
                     ));
                 } else if message.starts_with('[') && message.contains("-> me] ") {
                     // Common format used by Essentials and other custom plugins: [Someone -> me] Message
-                    dm = Some((
+                    req = Some((
+                        false,
                         message.split(" ").next().unwrap()[1..].to_owned(),
                         message.split("-> me] ").collect::<Vec<_>>()[1].to_owned(),
                     ));
                 } else if message.contains(" whispers to you: ") {
                     // Vanilla minecraft: Someone whispers to you: Message
-                    dm = Some((
+                    req = Some((
+                        false,
                         message.split(" ").next().unwrap().to_owned(),
                         message.split("whispers to you: ").collect::<Vec<_>>()[1].to_owned(),
                     ));
@@ -219,16 +223,26 @@ impl Module for ChatModule {
                     if message.ends_with(&sender) {
                         message = message[..(message.len() - sender.len())].to_owned();
                     }
-                    dm = Some((sender, message));
-                } else if OPTS.public_chat && message.starts_with("<") && message.contains("> ") {
-                    // Recognize "<Sender> !tp BotName" as dm to bot with "!tp"
-                    let sp = message.split("> ").collect::<Vec<_>>();
-                    if sp.len() == 2 && sp[1].eq_ignore_ascii_case(&format!("!tp {}", bot.username())) {
-                        dm = Some((sp[0][1..].to_owned(), "!tp".to_owned()));
+                    req = Some((false, sender, message));
+                } else if OPTS.public_chat.len() > 0 && message.starts_with("<") && message.contains("> ") {
+                    // Basic public chat messages like: "<Sender> !command arg" or "<Rank | Sender> !command arg"
+                    let split_index = message.find("> ").unwrap();
+                    let mut sender = message[1..split_index].replace("|", " ");
+                    if sender.contains(" ") {
+                        // In case chat has a format like "<Rank | Sender> Message", we want to extract the sender only
+                        sender = sender.split(" ").last().unwrap().to_owned();
+                    }
+
+                    let content = message[split_index + "> ".len()..].to_owned();
+                    if !sender.is_empty() && !content.is_empty() {
+                        let username_re = regex::Regex::new("^[a-zA-Z0-9_]{1,16}$").context("Compile username regex")?;
+                        if username_re.is_match(&sender) {
+                            req = Some((true, sender, content));
+                        }
                     }
                 }
 
-                if let Some((sender, content)) = dm {
+                if let Some((public_chat, sender, content)) = req {
                     *self.last_dm_from.lock() = Some(sender.to_owned());
 
                     let (command, args) = if content.contains(' ') {
@@ -239,29 +253,33 @@ impl Module for ChatModule {
                         (content.to_owned(), vec![])
                     };
 
-                    info!("Executing command {command:?} sent by {sender:?} with args {args:?}");
-                    let self_clone = self.clone();
-                    let sender_clone = sender.clone();
-                    match commands::execute(&mut bot, bot_state, sender.clone(), command, args, move |feedback| {
-                        if OPTS.quiet {
-                            info!("Suppressing feedback (--quiet): {feedback}")
-                        } else {
-                            self_clone.msg(&sender_clone, feedback);
-                        }
-                    })
-                    .await
-                    {
-                        Ok(executed) => {
-                            if executed {
-                                *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                    if !public_chat || command.starts_with("!") {
+                        info!("Executing command {command:?} sent by {sender:?} with args {args:?}");
+                        let self_clone = self.clone();
+                        let sender_clone = sender.clone();
+                        match commands::execute(&mut bot, bot_state, public_chat, sender.clone(), command, args, move |feedback| {
+                            if OPTS.quiet {
+                                info!("Suppressing feedback (--quiet): {feedback}")
+                            } else if public_chat {
+                                self_clone.chat(feedback);
                             } else {
-                                warn!("Command was not executed. Most likely an unknown command.");
+                                self_clone.msg(&sender_clone, feedback);
                             }
-                        }
-                        Err(err) => {
-                            error!("Something went wrong when executing {sender:?}'s command {content:?}: {err:?}");
-                            if !OPTS.quiet {
-                                self.msg(sender, &format!("Oops: {err}"));
+                        })
+                        .await
+                        {
+                            Ok(executed) => {
+                                if executed {
+                                    *bot_state.last_dm_handled_at.lock() = Some(Instant::now());
+                                } else {
+                                    warn!("Command was not executed. Most likely an unknown command.");
+                                }
+                            }
+                            Err(err) => {
+                                error!("Something went wrong when executing {sender:?}'s command {content:?}: {err:?}");
+                                if !OPTS.quiet {
+                                    self.msg(sender, &format!("Oops: {err}"));
+                                }
                             }
                         }
                     }

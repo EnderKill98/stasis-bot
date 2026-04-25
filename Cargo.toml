@@ -59,3 +59,4 @@ openssl = { version = "*", features = [ "vendored" ] }
 reqwest = "0.12.23" # Fix common cross-compilation issue
 
 #axum = { version = "0.8.4", features = [ "macros" ] }
+regex = "1"

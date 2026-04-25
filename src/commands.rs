@@ -29,6 +29,7 @@ use uuid::Uuid;
 pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
     bot: &mut Client,
     bot_state: &BotState,
+    public_chat: bool,
     sender: String,
     mut command: String,
     args: Vec<String>,
@@ -37,7 +38,30 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
     if command.starts_with('!') {
         command.remove(0);
     }
+
+    //let mut is_explicitly_targeted = false; // Also uncomment below assignment
+    if command.contains("@") {
+        // Commands may use an @ to specify a specific receiver. Don't handle if not meant for this bot.
+        let mut sp = command.split("@").map(|s| s.to_owned()).collect::<Vec<String>>();
+        command = sp.remove(0);
+        let intended_target_name = sp.remove(0);
+
+        if !bot.username().eq_ignore_ascii_case(&intended_target_name) {
+            return Ok(false); // Command is explicitly meant for other bot
+        }
+        //is_explicitly_targeted = true;
+    }
     command = command.to_lowercase();
+    if public_chat
+        && OPTS
+            .public_chat
+            .iter()
+            .find(|allowed| allowed.as_str() == "*" || allowed.eq_ignore_ascii_case(&command) || allowed.eq_ignore_ascii_case(&format!("!{command}")))
+            .is_none()
+    {
+        return Ok(false); // Not enabled for public use
+    }
+
     let sender_is_admin = OPTS.admin.iter().any(|a| sender.eq_ignore_ascii_case(a) || a == "*");
 
     match command.as_str() {
@@ -87,6 +111,23 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
             if !OPTS.admin.is_empty() {
                 commands.push("!admins");
             }
+            if public_chat {
+                // Remove all commands not listed in OPTS.public_chat from help if was triggered from there
+                let mut i = 0usize;
+                while i < commands.len() {
+                    let command = commands[i];
+                    if OPTS
+                        .public_chat
+                        .iter()
+                        .find(|allowed| allowed.as_str() == "*" || allowed.eq_ignore_ascii_case(&command) || allowed.eq_ignore_ascii_case(&command[1..]))
+                        .is_none()
+                    {
+                        commands.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
             commands.sort();
 
             feedback(&format!("Commands: {}", commands.join(", ")));
@@ -114,8 +155,20 @@ pub async fn execute<F: Fn(&str) + Send + Sync + 'static>(
                 feedback(&format!("I'm not allowed to do pearl duties :(..."));
                 return Ok(true);
             }
-            let chamber_index = if !args.is_empty()
-                && let Ok(parsed_index) = args[0].parse()
+            let mut chamber_index_arg_index = 0usize;
+            if public_chat {
+                if args.is_empty() {
+                    feedback(&format!("Send \"!tp {}\" to have me pull your pearl.", bot.username()));
+                    return Ok(true);
+                } else if args[0].eq_ignore_ascii_case(&bot.username()) {
+                    chamber_index_arg_index = 1; // This bot was specified here
+                } else {
+                    return Ok(false); // did "!tp OtherBot"
+                }
+            }
+
+            let chamber_index = if args.len() > chamber_index_arg_index
+                && let Ok(parsed_index) = args[chamber_index_arg_index].parse()
             {
                 parsed_index
             } else {
