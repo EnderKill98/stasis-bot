@@ -8,7 +8,7 @@ use rand::Rng;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
 
 #[derive(Copy, Clone, PartialOrd, PartialEq, Debug)]
@@ -50,6 +50,7 @@ pub struct ChatModule {
     available_actions: Arc<AtomicU32>,
     last_dm_from: Arc<Mutex<Option<String>>>,
     last_anti_spam_word_count: Arc<AtomicU32>,
+    ready_to_send: Arc<AtomicBool>,
 }
 
 impl ChatModule {
@@ -57,6 +58,7 @@ impl ChatModule {
         self.available_actions.store(9, Ordering::Relaxed);
         self.queue.lock().clear();
         *self.last_dm_from.lock() = None;
+        self.ready_to_send.store(false, Ordering::Relaxed);
     }
 
     pub fn queue(&self, action: ChatAction) {
@@ -168,8 +170,12 @@ impl Module for ChatModule {
 
     async fn handle(&self, mut bot: Client, event: &Event, bot_state: &BotState) -> anyhow::Result<()> {
         match event {
-            Event::Login | Event::Disconnect(_) => self.reset(),
+            Event::Disconnect(_) => self.reset(),
             Event::Packet(packet) => match packet.as_ref() {
+                ClientboundGamePacket::Login(_) => self.reset(),
+                ClientboundGamePacket::PlayerPosition(_) => {
+                    self.ready_to_send.store(true, Ordering::Relaxed);
+                }
                 ClientboundGamePacket::SetTime(_) => {
                     self.available_actions
                         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| if v < 9 { Some(v + 1) } else { None })

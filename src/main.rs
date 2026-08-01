@@ -272,6 +272,10 @@ struct Opts {
     /// The target server will be able to authenticate your account against any server of its choosing!
     /// So be sure to trust it!
     open_auth_mod: bool,
+
+    #[clap(long)]
+    /// Send a command once entering a lobby (to join queue to main server)
+    queue_command: Option<String>,
 }
 
 static OPTS: Lazy<Opts> = Lazy::new(|| Opts::parse());

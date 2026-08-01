@@ -77,6 +77,12 @@ impl Module for VisualRangeModule {
                     if packet.entity_type == EntityKind::Player {
                         let mut seen = self.seen.lock();
                         let mut is_stranger = !seen.contains(&packet.uuid);
+                        if let Some(soundness) = bot_state.soundness.as_ref()
+                            && !soundness.is_ingame()
+                        {
+                            return Ok(()); // In a lobby of sorts
+                        }
+
                         if is_stranger {
                             seen.insert(packet.uuid);
                             let self_clone = self.clone();
@@ -145,6 +151,12 @@ impl Module for VisualRangeModule {
                     }
                 }
                 ClientboundGamePacket::RemoveEntities(packet) => {
+                    if let Some(soundness) = bot_state.soundness.as_ref()
+                        && !soundness.is_ingame()
+                    {
+                        return Ok(()); // In a lobby of sorts
+                    }
+
                     for entity_id in &packet.entity_ids {
                         // At this point the entity was already removed from the ecs world!
                         if let Some(profile) = self.visual_range_cache.lock().remove(entity_id) {

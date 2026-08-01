@@ -1,7 +1,7 @@
 use crate::module::Module;
 use crate::task::Task;
 use crate::task::group::TaskGroup;
-use crate::{BotState, entity_util};
+use crate::{BotState, OPTS, entity_util};
 use azalea::core::game_type::GameMode;
 use azalea::protocol::packets::game::ClientboundGamePacket;
 use azalea::protocol::packets::game::c_damage_event::OptionalEntityId;
@@ -47,6 +47,7 @@ pub struct SoundnessModule {
     pub status: Arc<Mutex<InGameStatus>>,
     pub last_damage_event: Arc<Mutex<Option<(Instant, String)>>>,
     pub interrupt_next_tick: Arc<AtomicBool>,
+    pub queue_next_tick: Arc<AtomicBool>,
 }
 
 impl SoundnessModule {
@@ -89,6 +90,10 @@ impl SoundnessModule {
                             bot_state.webhook("`🟣` In Limbo!");
                         } else {
                             info!("In Limbo!")
+                        }
+                        if OPTS.queue_command.is_some() {
+                            info!("Running queue command next tick...");
+                            self.queue_next_tick.store(true, Ordering::Relaxed);
                         }
                     }
                 }
@@ -324,6 +329,12 @@ impl Module for SoundnessModule {
             Event::Tick => {
                 if self.interrupt_next_tick.fetch_and(false, Ordering::Relaxed) {
                     self.interrupt(&mut bot, bot_state)?;
+                }
+                if self.queue_next_tick.fetch_and(false, Ordering::Relaxed)
+                    && let Some(queue_command) = &OPTS.queue_command
+                    && let Some(chat) = bot_state.chat.as_ref()
+                {
+                    chat.cmd(queue_command);
                 }
             }
             _ => {}
