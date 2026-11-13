@@ -36,9 +36,10 @@ use crate::module::webhook::WebhookModule;
 use crate::openauthmod::OpenAuthModPlugin;
 use crate::task::group::TaskGroup;
 use crate::task::{Task, TaskOutcome};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use azalea::app::PluginGroup;
 use azalea::entity::Position;
+use azalea::protocol::ServerAddress;
 use azalea::swarm::DefaultSwarmPlugins;
 use azalea::task_pool::{TaskPoolOptions, TaskPoolPlugin, TaskPoolThreadAssignmentPolicy};
 use azalea::{
@@ -604,7 +605,16 @@ async fn async_main() -> Result<()> {
             "OpenAuthMod support is active. The target server can authenticate your account against any server of its choosing! Make sure to only use this on servers you trust!"
         );
     }
-    builder.start(OPTS.server_address.as_str()).await.context("Running swarm")?
+
+    // Start bot and send the typed string properly in handshake packet
+    let server_address: ServerAddress = match OPTS.server_address.as_str().try_into() {
+        Ok(addr) => addr,
+        Err(err) => bail!("Failed to parse server_address: {err}"),
+    };
+    builder
+        .start_with_default_opts(server_address.clone(), JoinOpts::new().custom_address(server_address))
+        .await
+        .context("Running swarm")?
 }
 
 async fn auth() -> Result<AuthResult> {
