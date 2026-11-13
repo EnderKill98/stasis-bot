@@ -3,6 +3,7 @@
 
 mod blockpos_string;
 pub mod commands;
+mod config_ping_responder;
 pub mod devnet;
 pub mod entity_util;
 pub mod module;
@@ -15,6 +16,7 @@ pub mod util;
 extern crate tracing;
 
 use crate::blockpos_string::BlockPosString;
+use crate::config_ping_responder::ConfigurationPingResponder;
 use crate::module::Module;
 use crate::module::auto_tpa::AutoTpaModule;
 use crate::module::autoeat::AutoEatModule;
@@ -592,6 +594,7 @@ async fn async_main() -> Result<()> {
         .add_plugins(DefaultBotPlugins)
         .add_plugins(DefaultSwarmPlugins)
         .add_plugins(TaskPoolPlugin { task_pool_options: task_opts })
+        .add_plugins(ConfigurationPingResponder {})
         .set_handler(handle)
         .set_swarm_handler(swarm_handle)
         .add_account(account.clone());
